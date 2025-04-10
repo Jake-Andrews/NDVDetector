@@ -6,6 +6,17 @@ project(NDVDetector
     LANGUAGES CXX
 )
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
+    libavdevice
+    libavfilter
+    libavformat
+    libavcodec
+    libswresample
+    libswscale
+    libavutil
+)
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)

@@ -6,3 +6,7 @@ file(GLOB_RECURSE SOURCES
 
 add_executable(NDVDetector ${SOURCES})
 
+target_link_libraries(NDVDetector
+    PkgConfig::LIBAV
+)
+
