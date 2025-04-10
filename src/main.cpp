@@ -1,3 +1,4 @@
+#include "./DecodingFrames.h"
 #include "./SearchDirectories.h"
 #include <iostream>
 
@@ -26,6 +27,9 @@ int main(int argc, char* argv[])
     for (auto const& file : files) {
         std::cout << file << '\n';
     }
+
+    auto const video_path = files[0].c_str();
+    decode_and_save_video_frames(video_path);
 
     return 0;
 }
