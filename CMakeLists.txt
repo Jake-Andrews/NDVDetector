@@ -23,3 +23,5 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_compile_options(-fmax-errors=0)
 
 add_subdirectory(src)       
+add_subdirectory(vendor/phash)       
+
