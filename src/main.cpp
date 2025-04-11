@@ -1,5 +1,6 @@
-#include "./DecodingFrames.h"
-#include "./SearchDirectories.h"
+#include "DecodingFrames.h"
+#include "SearchDirectories.h"
+#include "VideoInfo.h"
 #include <iostream>
 
 static std::unordered_set<std::string> const VIDEO_EXTENSIONS = {
@@ -30,6 +31,14 @@ int main(int argc, char* argv[])
 
     auto const video_path = files[0].c_str();
     decode_and_save_video_frames(video_path);
+
+    auto const infoOpt = extract_info(video_path);
+    if (!infoOpt) {
+        std::cerr << "Failed to extract media info.\n";
+        return 1;
+    }
+
+    print_info(*infoOpt);
 
     return 0;
 }
