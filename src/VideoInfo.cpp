@@ -110,24 +110,3 @@ void print_info(FFProbeOutput const& info)
         }
     }
 }
-
-std::ostream& operator<<(std::ostream& os, VideoInfo const& info)
-{
-    os << std::fixed << std::setprecision(2);
-    os << "Codec Type  : " << info.codecType << "\n";
-    os << "Codec Name  : " << info.codecName << "\n";
-
-    if (info.codecType == "Video") {
-        os << "Resolution  : " << info.width << "x" << info.height << "\n";
-        os << "Frame Rate  : " << info.frameRate << " fps\n";
-
-    } else if (info.codecType == "Audio") {
-        os << "Sample Rate : " << info.sampleRate << " Hz\n";
-    }
-
-    os << "Duration    : " << static_cast<double>(info.duration) / AV_TIME_BASE << " seconds\n";
-    os << "Size        : " << static_cast<double>(info.size) / (1024 * 1024) << " MB\n";
-    os << "Bit Rate    : " << info.bitRate / 1000 << " kb/s\n";
-
-    return os;
-}
