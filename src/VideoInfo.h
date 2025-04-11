@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
@@ -29,6 +30,6 @@ struct FFProbeOutput {
     FormatInfo format;
 };
 
-std::optional<FFProbeOutput> extract_info(std::string_view inputFile);
+std::optional<FFProbeOutput> extract_info(std::filesystem::path const& fPath);
 
 void print_info(FFProbeOutput const& info);

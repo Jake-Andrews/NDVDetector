@@ -101,6 +101,11 @@ if(PHASH_STATIC)
 	add_library(pHash STATIC ${MMAN_FILE} ${DIRENT_FILE} src/pHash.cpp ${EXTRA_SRC})
 endif()
 
+target_include_directories(pHash PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/third-party/CImg
+)
+
 set_property(TARGET pHash PROPERTY VERSION "${pHash_VERSION_MAJOR}.${pHash_VERSION_MINOR}.${pHash_VERSION_PATCH}")
 target_link_libraries(pHash ${LIBS_DEPS})
 

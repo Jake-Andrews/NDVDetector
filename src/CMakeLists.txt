@@ -1,12 +1,8 @@
-set(SOURCE_DIR ${CMAKE_SOURCE_DIR}/src)
-
-file(GLOB_RECURSE SOURCES
-    ${SOURCE_DIR}/*.cpp
-)
+file(GLOB_RECURSE SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
 
 add_executable(NDVDetector ${SOURCES})
 
-target_link_libraries(NDVDetector
+target_link_libraries(NDVDetector PRIVATE
     PkgConfig::LIBAV
     pHash
 )

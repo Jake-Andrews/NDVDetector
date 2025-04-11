@@ -29,14 +29,8 @@ open_format_context(std::filesystem::path const& filePath)
     return std::unique_ptr<AVFormatContext, decltype(&free_format_context)>(ctx, free_format_context);
 }
 
-std::optional<FFProbeOutput> extract_info(std::string_view inputFile)
+std::optional<FFProbeOutput> extract_info(std::filesystem::path const& fsPath)
 {
-    auto const fsPath = std::filesystem::path(inputFile);
-    if (!std::filesystem::exists(fsPath)) {
-        std::cerr << "[FFmpeg] Error: File does not exist: " << fsPath << '\n';
-        return std::nullopt;
-    }
-
     auto formatCtxOpt = open_format_context(fsPath);
     if (!formatCtxOpt)
         return std::nullopt;
