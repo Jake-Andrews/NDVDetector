@@ -32,5 +32,6 @@ pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
 find_package(SQLite3 REQUIRED)
 
 add_subdirectory(vendor/phash)
+add_subdirectory(vendor/hftrie)
 add_subdirectory(src)
 

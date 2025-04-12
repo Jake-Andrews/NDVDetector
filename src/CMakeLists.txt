@@ -10,5 +10,6 @@ target_link_libraries(NDVDetector PRIVATE
     PkgConfig::LIBAV
     pHash
     SQLite::SQLite3
+    hftrie
 )
 

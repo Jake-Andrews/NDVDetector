@@ -1,5 +1,4 @@
 .cache/
 build/
 videos/
-vendor/
 videos.db
