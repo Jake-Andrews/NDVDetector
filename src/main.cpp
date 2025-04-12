@@ -3,16 +3,22 @@
 #include "Hash.h"
 #include "SearchDirectories.h"
 #include "VideoInfo.h"
+
 #include <cstdio>
 #include <cstdlib>
+#include <hft/hftrie.hpp>
 #include <iostream>
 #include <ostream>
+#include <unordered_map>
 #include <unordered_set>
 
 static std::unordered_set<std::string> const VIDEO_EXTENSIONS = {
     ".mp4",
     ".webm"
 };
+
+constexpr uint64_t SEARCH_RANGE = 4;
+constexpr int MATCH_THRESHOLD = 5;
 
 int main(int argc, char* argv[])
 {
@@ -82,6 +88,69 @@ int main(int argc, char* argv[])
     }
 
     // 5. Identify Duplicate videos based on pHashes
+    auto groups = db.getAllHashGroups();
+    for (auto const& group : groups) {
+        std::cout << "Video ID: " << group.fk_hash_video << ", Hashes: ";
+        for (auto h : group.hashes) {
+            std::cout << std::hex << h << " ";
+        }
+        std::cout << "\n";
+    }
+
+    hft::HFTrie trie;
+
+    for (auto const& group : groups) {
+        for (auto h : group.hashes) {
+            trie.Insert({ group.fk_hash_video, h });
+        }
+    }
+
+    auto const fvideos = db.getAllVideos();
+
+    // fk_hash_video -> Path map
+    std::unordered_map<int, std::string> videoPaths;
+    videoPaths.reserve(fvideos.size());
+    for (auto const& v : fvideos) {
+        videoPaths[v.id] = v.path;
+    }
+
+    for (auto const& group : groups) {
+        std::unordered_map<int, int> matchCounts;
+
+        // For each hash, do a range search, increment match counts
+        for (auto h : group.hashes) {
+            auto results = trie.RangeSearchFast(h, SEARCH_RANGE);
+            for (auto const& r : results) {
+                matchCounts[r.id]++;
+            }
+        }
+
+        // Collect likely matches that appear at least MATCH_THRESHOLD times
+        std::unordered_set<int> likelyMatches;
+        for (auto const& [videoId, count] : matchCounts) {
+            if (count >= MATCH_THRESHOLD && videoId != group.fk_hash_video) {
+                likelyMatches.insert(videoId);
+            }
+        }
+
+        if (!likelyMatches.empty()) {
+            auto it = videoPaths.find(group.fk_hash_video);
+            if (it != videoPaths.end()) {
+                std::cout << "Video: " << it->second << " matches with:\n";
+            } else {
+                std::cout << "Unknown video id " << group.fk_hash_video << " matches with:\n";
+            }
+
+            for (auto matchId : likelyMatches) {
+                auto mp = videoPaths.find(matchId);
+                if (mp != videoPaths.end()) {
+                    std::cout << "   -> " << mp->second << "\n";
+                } else {
+                    std::cout << "   -> Unknown video id " << matchId << "\n";
+                }
+            }
+        }
+    }
 
     return 0;
 }

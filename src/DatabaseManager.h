@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <iostream>
 #include <vector>
+#include "Hash.h"
 #include "VideoInfo.h"
 
 class DatabaseManager {
@@ -147,11 +148,46 @@ public:
         return results;
     }
 
+
+    std::vector<HashGroup> getAllHashGroups() const {
+        std::vector<HashGroup> results;
+
+        constexpr const char* sql = R"(
+            SELECT video_id, hash_blob 
+            FROM hash
+        )";
+
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            std::cerr << "[DB] Failed to prepare SELECT getAllHashGroups: " << sqlite3_errmsg(m_db) << '\n';
+            return results;
+        }
+
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            int videoId = sqlite3_column_int(stmt, 0);
+            const void* blobPtr = sqlite3_column_blob(stmt, 1);
+            int blobSize = sqlite3_column_bytes(stmt, 1);
+
+            if (!blobPtr || blobSize <= 0) continue;
+
+            size_t count = blobSize / sizeof(uint64_t);
+            const auto* raw = static_cast<const uint64_t*>(blobPtr);
+
+            HashGroup group;
+            group.fk_hash_video = videoId;
+            group.hashes.assign(raw, raw + count);
+
+            results.push_back(std::move(group));
+        }
+
+        sqlite3_finalize(stmt);
+        return results;
+    }
+
 private:
     sqlite3* m_db = nullptr;
 
     void initDatabase() {
-        // 1) video table
         std::string const createVideoTableSQL = R"(
             CREATE TABLE IF NOT EXISTS video (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -173,9 +209,6 @@ private:
             );
         )";
 
-        // 2) single row of BLOB pHashes per video
-        //    - video_id references video(id)
-        //    - 'hash_blob' holds all pHashes
         std::string const createHashTableSQL = R"(
             CREATE TABLE IF NOT EXISTS hash (
                 video_id INTEGER PRIMARY KEY,

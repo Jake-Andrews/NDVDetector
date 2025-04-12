@@ -4,6 +4,7 @@ add_executable(NDVDetector ${SOURCES})
 
 target_include_directories(NDVDetector PRIVATE
     ${CMAKE_SOURCE_DIR}/vendor/phash/third-party/CImg
+    ${CMAKE_SOURCE_DIR}/vendor/hftrie/include
 )
 
 target_link_libraries(NDVDetector PRIVATE
