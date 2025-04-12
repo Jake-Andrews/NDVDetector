@@ -29,6 +29,8 @@ pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
     libavutil
 )
 
+find_package(SQLite3 REQUIRED)
+
 add_subdirectory(vendor/phash)
 add_subdirectory(src)
 

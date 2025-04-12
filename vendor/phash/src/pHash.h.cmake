@@ -226,11 +226,17 @@ int ph_compare_images(const char *file1, const char *file2,double &pcc, double s
 
 /*! /brief compute dct robust image hash
  *  /param file string variable for name of file
- *  /param hash of type ulong64 (must be 64-bit variable)
+ *  /param hash - (out) of type ulong64 (must be 64-bit variable)
  *  /return int value - -1 for failure, 1 for success
  */
 int ph_dct_imagehash(const char* file,ulong64 &hash);
 
+/** /brief compute dct robust image hash from buffer
+*   /param img - CImg<float> const& image buffer
+*   /param hash - (out) of type ulong64 (must be 64-bit variable)
+*   /return int value - -1 for failure, 1 for success
+**/
+int ph_dct_imagehash_from_buffer(CImg<float> const &image, ulong64 &hash);
 
 #ifdef HAVE_VIDEO_HASH
 static CImgList<uint8_t>* ph_getKeyFramesFromVideo(const char *filename);

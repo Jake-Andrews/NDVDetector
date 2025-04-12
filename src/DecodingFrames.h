@@ -1,8 +1,8 @@
 #pragma once
 
-#include <filesystem>
 #include <string>
 #include <vector>
 
-std::vector<std::string> decode_and_save_video_frames(std::filesystem::path const&);
+#include "CImgWrapper.h"
 
+std::vector<CImg<float>> decode_video_frames_as_cimg(std::string const& file_path);

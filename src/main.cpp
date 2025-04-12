@@ -1,8 +1,13 @@
+#include "DatabaseManager.h"
 #include "DecodingFrames.h"
-#include "Hash.h" // So we see generate_pHashes
+#include "Hash.h"
 #include "SearchDirectories.h"
 #include "VideoInfo.h"
+#include <cstdio>
+#include <cstdlib>
 #include <iostream>
+#include <ostream>
+#include <unordered_map>
 #include <unordered_set>
 
 static std::unordered_set<std::string> const VIDEO_EXTENSIONS = {
@@ -17,6 +22,7 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    // 1. Validate Directory path
     std::filesystem::path input_path(argv[1]);
     std::error_code ec;
 
@@ -26,27 +32,61 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    auto const files = get_files_with_extensions(input_path, VIDEO_EXTENSIONS);
+    // 2. Search FS for videos and fill out avaliable 'VideoInfo' fields. Then
+    // get 'VideoInfo' from DB and remove from 'videos' if path exists in DB.
+    auto videos = get_video_info(input_path, VIDEO_EXTENSIONS);
 
-    for (auto const& video_path : files) {
-        std::cout << "Processing video: " << video_path << '\n';
+    DatabaseManager db("videos.db");
+    auto const db_videos = db.getAllVideos();
 
-        auto const infoOpt = extract_info(video_path);
-        if (!infoOpt) {
-            std::cerr << "Failed to extract media info for: " << video_path << "\n";
+    std::cout << db_videos.size() << "\n";
+
+    remove_already_processed(videos, db_videos);
+
+    std::cout << videos.size() << "\n";
+
+    // 3. Get more video info from FFprobe to use during hashing & screenshoting
+    // and to identify corrupt videos to skip
+    for (auto& v : videos) {
+        std::cout << "Processing: " << v.path << '\n';
+
+        bool success = extract_info(v);
+        if (!success) {
+            std::cerr << "Failed to extract media info for: " << v.path << "\n";
+            // remove from list, mark?
             continue;
         }
-        print_info(*infoOpt);
 
-        auto screenshotPaths = decode_and_save_video_frames(video_path);
-        if (screenshotPaths.empty()) {
-            std::cerr << "No frames extracted from: " << video_path << "\n";
-            continue;
-        }
-
-        auto hashResults = generate_pHashes(screenshotPaths);
-        print_pHashes(hashResults);
+        db.insertVideo(v);
     }
+
+    // 4. Generate screenshots and hash them. Then store the hashes and one
+    // screenshot in the DB for display in the UI (to do).
+    std::unordered_map<int, std::string> indexToPath;
+
+    uint32_t i = 0;
+    for (auto const& v : videos) {
+
+        indexToPath[i] = v.path;
+
+        std::string const a = v.path;
+
+        auto screenshots
+            = decode_video_frames_as_cimg(a);
+        if (screenshots.empty()) {
+            std::cerr << "No frames extracted from: " << v.path << "\n";
+            continue;
+        }
+        std::cout << "sneed" << "\n";
+        std::cout.flush();
+
+        auto hashResults = generate_pHashes(screenshots, i);
+        print_pHashes(hashResults);
+
+        i++;
+    }
+
+    // 5. Identify Duplicate videos based on pHashes
 
     return 0;
 }

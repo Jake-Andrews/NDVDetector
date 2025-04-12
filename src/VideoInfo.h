@@ -1,9 +1,27 @@
 #pragma once
 
-#include <filesystem>
-#include <optional>
 #include <string>
 #include <vector>
+
+struct VideoInfo {
+    int id = 0;
+
+    std::string path;        
+    std::string created_at;  
+    std::string modified_at;
+    std::string video_codec;
+    std::string audio_codec;
+    int width = 0;
+    int height = 0;
+    int duration = 0;
+    int size = 0;
+    int bit_rate = 0;
+    int num_hard_links = 0;
+    long inode = 0;
+    long device = 0;
+    int sample_rate_avg = 0;
+    double avg_frame_rate = 0.0;
+};
 
 struct FractionFloat64 {
     double numerator = 0.0;
@@ -30,6 +48,8 @@ struct FFProbeOutput {
     FormatInfo format;
 };
 
-std::optional<FFProbeOutput> extract_info(std::filesystem::path const& fPath);
+bool extract_info(VideoInfo& v);
 
 void print_info(FFProbeOutput const& info);
+
+void remove_already_processed(std::vector<VideoInfo>& video_info, std::vector<VideoInfo> const& db_videos);

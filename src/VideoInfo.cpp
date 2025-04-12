@@ -4,6 +4,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 extern "C" {
@@ -19,65 +20,86 @@ void free_format_context(AVFormatContext* ctx)
 }
 
 std::optional<std::unique_ptr<AVFormatContext, decltype(&free_format_context)>>
-open_format_context(std::filesystem::path const& filePath)
+open_format_context(std::string const& file_path)
 {
     AVFormatContext* ctx = nullptr;
-    if (avformat_open_input(&ctx, filePath.string().c_str(), nullptr, nullptr) != 0) {
-        std::cerr << "[FFmpeg] Error: Failed to open file: " << filePath << '\n';
+    if (avformat_open_input(&ctx, file_path.c_str(), nullptr, nullptr) != 0) {
+        std::cerr << "[FFmpeg] Error: Failed to open file: " << file_path << '\n';
         return std::nullopt;
     }
     return std::unique_ptr<AVFormatContext, decltype(&free_format_context)>(ctx, free_format_context);
 }
 
-std::optional<FFProbeOutput> extract_info(std::filesystem::path const& fsPath)
+bool extract_info(VideoInfo& out)
 {
-    auto formatCtxOpt = open_format_context(fsPath);
-    if (!formatCtxOpt)
-        return std::nullopt;
-
-    if (avformat_find_stream_info(formatCtxOpt->get(), nullptr) < 0) {
-        std::cerr << "[FFmpeg] Error: Failed to find stream info for file: " << fsPath << '\n';
-        return std::nullopt;
+    if (!std::filesystem::exists(out.path)) {
+        std::cerr << "[FFmpeg] Error: File does not exist: " << out.path << '\n';
+        return false;
     }
 
-    FFProbeOutput result;
-    result.format.duration = std::to_string(formatCtxOpt->get()->duration / AV_TIME_BASE);
-    result.format.size = std::to_string(std::filesystem::file_size(fsPath));
-    result.format.bitRate = std::to_string(formatCtxOpt->get()->bit_rate);
+    auto formatCtxOpt = open_format_context(out.path);
+    if (!formatCtxOpt)
+        return false;
+
+    if (avformat_find_stream_info(formatCtxOpt->get(), nullptr) < 0) {
+        std::cerr << "[FFmpeg] Error: Failed to find stream info for file: " << out.path << '\n';
+        return false;
+    }
+
+    out.duration = static_cast<int>(formatCtxOpt->get()->duration / AV_TIME_BASE);
+    out.size = static_cast<int>(std::filesystem::file_size(out.path));
+    out.bit_rate = static_cast<int>(formatCtxOpt->get()->bit_rate);
 
     for (unsigned i = 0; i < formatCtxOpt->get()->nb_streams; ++i) {
-
         auto* stream = formatCtxOpt->get()->streams[i];
         if (!stream || !stream->codecpar) {
-            std::cerr << "[FFmpeg] Warning: Invalid stream " << i << " in file: " << fsPath << '\n';
+            std::cerr << "[FFmpeg] Warning: Invalid stream " << i << " in file: " << out.path << '\n';
             continue;
         }
 
         auto* params = stream->codecpar;
         auto const* codec = avcodec_find_decoder(params->codec_id);
+        std::string codecName = codec ? codec->name : "unknown";
 
-        StreamInfo info;
         if (params->codec_type == AVMEDIA_TYPE_VIDEO) {
-            info.codecType = "video";
-            info.width = params->width;
-            info.height = params->height;
+            out.video_codec = codecName;
+            out.width = params->width;
+            out.height = params->height;
+
             auto r = stream->avg_frame_rate;
-            info.avgFrameRate.numerator = r.num;
-            info.avgFrameRate.denominator = r.den;
+            out.avg_frame_rate = r.den > 0 ? static_cast<double>(r.num) / r.den : 0.0;
 
         } else if (params->codec_type == AVMEDIA_TYPE_AUDIO) {
-            info.codecType = "audio";
-            info.sampleRateAvg = params->sample_rate;
-
-        } else {
-            info.codecType = "other";
+            out.audio_codec = codecName;
+            out.sample_rate_avg = params->sample_rate;
         }
-
-        info.codecName = codec ? codec->name : "unknown";
-        result.streams.push_back(std::move(info));
     }
 
-    return result;
+    return true;
+}
+
+void remove_already_processed(std::vector<VideoInfo>& fs_videos, std::vector<VideoInfo> const& db_videos)
+{
+    // Store already processed paths in a set for fast lookup
+    std::unordered_set<std::filesystem::path> knownPaths;
+    knownPaths.reserve(db_videos.size());
+
+    for (auto const& v : db_videos) {
+        knownPaths.insert(v.path);
+    }
+
+    // Remove any fs_videos whose path already exists in knownPaths
+    auto new_end = std::remove_if(fs_videos.begin(), fs_videos.end(),
+        [&](VideoInfo const& v) {
+            std::filesystem::path p = v.path;
+            if (knownPaths.contains(p)) {
+                std::cout << "[Info] Skipping already processed: " << p << '\n';
+                return true;
+            }
+            return false;
+        });
+
+    fs_videos.erase(new_end, fs_videos.end());
 }
 
 void print_info(FFProbeOutput const& info)

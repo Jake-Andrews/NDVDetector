@@ -302,6 +302,24 @@ static CImg<float> ph_dct_matrix(const int N) {
 }
 
 static const CImg<float> dct_matrix = ph_dct_matrix(32);
+int ph_dct_imagehash_from_buffer(CImg<float> const &img, ulong64 &hash) {
+    const CImg<float> &C = dct_matrix;
+    CImg<float> Ctransp = C.get_transpose();
+
+    CImg<float> dctImage = (C)*img * Ctransp;
+
+    CImg<float> subsec = dctImage.crop(1, 1, 8, 8).unroll('x');
+
+    float median = subsec.median();
+    hash = 0;
+    for (int i = 0; i < 64; i++, hash <<= 1) {
+        float current = subsec(i);
+        if (current > median) hash |= 0x01;
+    }
+
+    return 0;
+}
+
 int ph_dct_imagehash(const char *file, ulong64 &hash) {
     if (!file) {
         return -1;
@@ -328,21 +346,8 @@ int ph_dct_imagehash(const char *file, ulong64 &hash) {
     }
 
     img.resize(32, 32);
-    const CImg<float> &C = dct_matrix;
-    CImg<float> Ctransp = C.get_transpose();
 
-    CImg<float> dctImage = (C)*img * Ctransp;
-
-    CImg<float> subsec = dctImage.crop(1, 1, 8, 8).unroll('x');
-
-    float median = subsec.median();
-    hash = 0;
-    for (int i = 0; i < 64; i++, hash <<= 1) {
-        float current = subsec(i);
-        if (current > median) hash |= 0x01;
-    }
-
-    return 0;
+    return ph_dct_imagehash_from_buffer(img, hash);
 }
 
 #endif
