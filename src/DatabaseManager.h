@@ -1,9 +1,11 @@
 #pragma once
 
+#include <cstring>
 #include <sqlite3.h>
 #include <string>
 #include <stdexcept>
 #include <iostream>
+#include <vector>
 #include "VideoInfo.h"
 
 class DatabaseManager {
@@ -12,9 +14,7 @@ public:
         if (sqlite3_open(dbPath.c_str(), &m_db) != SQLITE_OK) {
             throw std::runtime_error("Cannot open database: " + std::string(sqlite3_errmsg(m_db)));
         }
-
         execStatement("PRAGMA foreign_keys = ON;");
-
         initDatabase();
     }
 
@@ -28,8 +28,8 @@ public:
     DatabaseManager(DatabaseManager const&) = delete;
     DatabaseManager& operator=(DatabaseManager const&) = delete;
 
-    void insertVideo(VideoInfo const& video) {
-        char const* sql = R"(
+    void insertVideo(VideoInfo &video) {
+        static char const* sql = R"(
             INSERT INTO video (
                 path, created_at, modified_at, 
                 video_codec, audio_codec, width, height, 
@@ -40,7 +40,7 @@ public:
 
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-            std::cerr << "Failed to prepare insert statement: " << sqlite3_errmsg(m_db) << "\n";
+            std::cerr << "[DB] Failed to prepare insertVideo: " << sqlite3_errmsg(m_db) << "\n";
             return;
         }
 
@@ -55,13 +55,49 @@ public:
         sqlite3_bind_int  (stmt,   9, video.size);
         sqlite3_bind_int  (stmt,  10, video.bit_rate);
         sqlite3_bind_int  (stmt,  11, video.num_hard_links);
-        sqlite3_bind_int64 (stmt, 12, static_cast<sqlite3_int64>(video.inode));
-        sqlite3_bind_int64 (stmt, 13, static_cast<sqlite3_int64>(video.device));
+        sqlite3_bind_int64(stmt,  12, static_cast<sqlite3_int64>(video.inode));
+        sqlite3_bind_int64(stmt,  13, static_cast<sqlite3_int64>(video.device));
         sqlite3_bind_int  (stmt,  14, video.sample_rate_avg);
         sqlite3_bind_double(stmt, 15, video.avg_frame_rate);
 
         if (sqlite3_step(stmt) != SQLITE_DONE) {
-            std::cerr << "Failed to insert video: " << sqlite3_errmsg(m_db) << "\n";
+            std::cerr << "[DB] Failed to insert video: " << sqlite3_errmsg(m_db) << "\n";
+        }
+
+        sqlite3_finalize(stmt);
+
+        video.id = static_cast<int>(sqlite3_last_insert_rowid(m_db));
+    }
+
+    void insertAllHashes(int video_id, std::vector<uint64_t> const& pHashes) {
+        if (pHashes.empty()) {
+            return;
+        }
+
+        static char const* sql = R"(
+            INSERT INTO hash (video_id, hash_blob)
+            VALUES (?, ?);
+        )";
+
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            std::cerr << "[DB] Failed to prepare insertAllHashes: " << sqlite3_errmsg(m_db) << "\n";
+            return;
+        }
+
+        sqlite3_bind_int(stmt, 1, video_id);
+
+        size_t numBytes = pHashes.size() * sizeof(unsigned long long);
+        // It's safe to reinterpret_cast directly from &pHashes[0]
+        // as they are contiguous in memory
+        void const* dataPtr = static_cast<void const*>(pHashes.data());
+
+        // 3) Bind the blob
+        // Flags: SQLITE_TRANSIENT means SQLite makes its own copy
+        sqlite3_bind_blob(stmt, 2, dataPtr, static_cast<int>(numBytes), SQLITE_TRANSIENT);
+
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            std::cerr << "[DB] Failed to insert hash blob: " << sqlite3_errmsg(m_db) << "\n";
         }
 
         sqlite3_finalize(stmt);
@@ -81,7 +117,7 @@ public:
 
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-            std::cerr << "[Error] Failed to prepare SELECT: " << sqlite3_errmsg(m_db) << '\n';
+            std::cerr << "[DB] Failed to prepare SELECT getAllVideos: " << sqlite3_errmsg(m_db) << '\n';
             return results;
         }
 
@@ -111,12 +147,12 @@ public:
         return results;
     }
 
-
 private:
     sqlite3* m_db = nullptr;
 
     void initDatabase() {
-        std::string const createTableSQL = R"(
+        // 1) video table
+        std::string const createVideoTableSQL = R"(
             CREATE TABLE IF NOT EXISTS video (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 path TEXT NOT NULL,
@@ -136,7 +172,20 @@ private:
                 avg_frame_rate REAL
             );
         )";
-        execStatement(createTableSQL);
+
+        // 2) single row of BLOB pHashes per video
+        //    - video_id references video(id)
+        //    - 'hash_blob' holds all pHashes
+        std::string const createHashTableSQL = R"(
+            CREATE TABLE IF NOT EXISTS hash (
+                video_id INTEGER PRIMARY KEY,
+                hash_blob BLOB NOT NULL,
+                FOREIGN KEY(video_id) REFERENCES video(id) ON DELETE CASCADE
+            );
+        )";
+
+        execStatement(createVideoTableSQL);
+        execStatement(createHashTableSQL);
     }
 
     void execStatement(std::string const& sql) {
@@ -144,7 +193,7 @@ private:
         if (sqlite3_exec(m_db, sql.c_str(), nullptr, nullptr, &errMsg) != SQLITE_OK) {
             std::string msg = errMsg ? errMsg : "Unknown error";
             sqlite3_free(errMsg);
-            throw std::runtime_error("SQLite error: " + msg);
+            throw std::runtime_error("[DB] SQLite error: " + msg);
         }
     }
 };

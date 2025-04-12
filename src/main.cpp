@@ -7,7 +7,6 @@
 #include <cstdlib>
 #include <iostream>
 #include <ostream>
-#include <unordered_map>
 #include <unordered_set>
 
 static std::unordered_set<std::string> const VIDEO_EXTENSIONS = {
@@ -57,33 +56,29 @@ int main(int argc, char* argv[])
             continue;
         }
 
+        // adds id to VideoInfo
         db.insertVideo(v);
     }
 
     // 4. Generate screenshots and hash them. Then store the hashes and one
     // screenshot in the DB for display in the UI (to do).
-    std::unordered_map<int, std::string> indexToPath;
 
-    uint32_t i = 0;
     for (auto const& v : videos) {
 
-        indexToPath[i] = v.path;
-
-        std::string const a = v.path;
-
         auto screenshots
-            = decode_video_frames_as_cimg(a);
+            = decode_video_frames_as_cimg(v.path);
         if (screenshots.empty()) {
-            std::cerr << "No frames extracted from: " << v.path << "\n";
+            std::cerr << "No frames extracted from: " << v.path << ", skipping.\n";
             continue;
         }
-        std::cout << "sneed" << "\n";
-        std::cout.flush();
 
-        auto hashResults = generate_pHashes(screenshots, i);
-        print_pHashes(hashResults);
+        auto hashes = generate_pHashes(screenshots);
+        if (hashes.empty()) {
+            std::cerr << "No hashes extracted from: " << v.path << ", skipping.\n";
+            continue;
+        }
 
-        i++;
+        db.insertAllHashes(v.id, hashes);
     }
 
     // 5. Identify Duplicate videos based on pHashes

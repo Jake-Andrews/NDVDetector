@@ -6,11 +6,12 @@
 #include "CImgWrapper.h"
 
 struct Hash {
-    uint32_t index = -1;
+    int id = -1; 
     uint64_t value = 0;
+    int fk_hash_video = -1;
 };
 
-std::vector<Hash> generate_pHashes(std::vector<CImg<float>> const&, uint32_t);
+std::vector<uint64_t> generate_pHashes(std::vector<CImg<float>> const&);
 
 void print_pHashes(std::vector<Hash> const& results);
 
