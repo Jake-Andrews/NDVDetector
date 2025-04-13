@@ -31,6 +31,10 @@ pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
 
 find_package(SQLite3 REQUIRED)
 
+find_package(Qt6 REQUIRED COMPONENTS Widgets)
+qt_standard_project_setup()
+
+
 add_subdirectory(vendor/phash)
 add_subdirectory(vendor/hftrie)
 add_subdirectory(src)

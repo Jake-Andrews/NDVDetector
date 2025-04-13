@@ -1,6 +1,9 @@
-file(GLOB_RECURSE SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
+file(GLOB_RECURSE SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/*.ui")
 
-add_executable(NDVDetector ${SOURCES})
+qt_add_executable(NDVDetector
+    MANUAL_FINALIZATION
+    ${SOURCES}
+)
 
 target_include_directories(NDVDetector PRIVATE
     ${CMAKE_SOURCE_DIR}/vendor/phash/third-party/CImg
@@ -12,5 +15,8 @@ target_link_libraries(NDVDetector PRIVATE
     pHash
     SQLite::SQLite3
     hftrie
+    Qt6::Widgets
 )
+
+qt_finalize_executable(NDVDetector)
 
