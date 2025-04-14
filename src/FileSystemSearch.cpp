@@ -1,4 +1,4 @@
-#include "SearchDirectories.h"
+#include "FileSystemSearch.h"
 #include "VideoInfo.h"
 
 #include <chrono>
@@ -14,7 +14,7 @@
 #endif
 
 std::vector<VideoInfo>
-get_video_info(std::filesystem::path const& root,
+getVideosFromPath(std::filesystem::path const& root,
     std::unordered_set<std::string> const& extensions)
 {
     std::vector<VideoInfo> results;
@@ -88,4 +88,27 @@ get_video_info(std::filesystem::path const& root,
     }
 
     return results;
+}
+
+bool validate_directory(std::filesystem::path const& root)
+{
+    std::error_code ec;
+
+    if (!std::filesystem::exists(root, ec)) {
+        std::cerr << "Path does not exist: " << root.string() << '\n';
+        if (ec) {
+            std::cerr << "Error: " << ec.message() << '\n';
+        }
+        return false;
+    }
+
+    if (!std::filesystem::is_directory(root, ec)) {
+        std::cerr << "Not a directory: " << root.string() << '\n';
+        if (ec) {
+            std::cerr << "Error: " << ec.message() << '\n';
+        }
+        return false;
+    }
+
+    return true;
 }

@@ -48,8 +48,5 @@ struct FFProbeOutput {
     FormatInfo format;
 };
 
-bool extract_info(VideoInfo& v);
-
 void print_info(FFProbeOutput const& info);
 
-void remove_already_processed(std::vector<VideoInfo>& video_info, std::vector<VideoInfo> const& db_videos);
