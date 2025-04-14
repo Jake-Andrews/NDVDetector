@@ -3,129 +3,131 @@
 #include "DuplicateDetector.h"
 #include "FFProbeExtractor.h"
 #include "FileSystemSearch.h"
-
+#include "VideoModel.h"
+#include <QDebug>
+#include <algorithm>
 #include <iostream>
+#include <numeric>
 
-VideoController::VideoController(DatabaseManager& db)
-    : m_db(db)
+VideoController::VideoController(DatabaseManager& db, QObject* parent)
+    : QObject(parent)
+    , m_db(db)
 {
 }
 
-std::vector<VideoInfo> VideoController::gatherVideos(std::filesystem::path const& root)
+void VideoController::runSearchAndDetection()
 {
-    static std::unordered_set<std::string> exts = { ".mp4", ".webm" };
-    auto vids = getVideosFromPath(root, exts);
-    return vids;
-}
-
-void VideoController::removeAlreadyProcessed(std::vector<VideoInfo>& videos, std::vector<VideoInfo> const& existing)
-{
-    std::unordered_set<std::string> existingPaths;
-    for (auto const& v : existing) {
-        existingPaths.insert(v.path);
-    }
-    std::erase_if(videos, [&](VideoInfo const& v) {
-        return existingPaths.contains(v.path);
-    });
-}
-
-bool VideoController::fillMetadata(VideoInfo& v)
-{
-    return extract_info(v);
-}
-
-void VideoController::storeVideoInDb(VideoInfo& v)
-{
-    m_db.insertVideo(v);
-}
-
-void VideoController::generateScreenshotsAndHashes(std::vector<VideoInfo> const& videos)
-{
-    for (auto const& v : videos) {
-
-        auto frames = decode_video_frames_as_cimg(v.path);
-        if (frames.empty()) {
-            std::cerr << "No frames extracted: " << v.path << "\n";
-            continue;
-        }
-
-        auto hashes = generate_pHashes(frames);
-        if (hashes.empty()) {
-            std::cerr << "No hashes extracted: " << v.path << "\n";
-            continue;
-        }
-        m_db.insertAllHashes(v.id, hashes);
-    }
-}
-
-std::vector<std::vector<VideoInfo>> VideoController::detectDuplicates()
-{
-    auto videos = m_db.getAllVideos();
-    auto hashGroups = m_db.getAllHashGroups();
-
-    return findDuplicates(std::move(videos), hashGroups, 4, 5);
-}
-
-std::unordered_set<std::string> static const VIDEO_EXTENSIONS = { ".mp4", ".webm" };
-
-void VideoController::runSearchAndDetection(MainWindow& ui)
-{
-    // 1) Gather videos from filesystem
     std::filesystem::path root("./");
     auto videos = getVideosFromPath(root, { ".mp4", ".webm" });
     auto dbVideos = m_db.getAllVideos();
 
-    // 2) Remove already processed from 'videos'
+    // remove already processed
     {
         std::unordered_set<std::string> knownPaths;
         knownPaths.reserve(dbVideos.size());
         for (auto const& dv : dbVideos) {
             knownPaths.insert(dv.path);
         }
-
         std::erase_if(videos, [&](VideoInfo const& v) {
             if (knownPaths.contains(v.path)) {
-                std::cout << "[Info] Skipping already processed: " << v.path << "\n";
+                std::cout << "[Info] Skipping processed: " << v.path << "\n";
                 return true;
             }
             return false;
         });
     }
 
-    // 3) Extract metadata & store in DB
+    // Extract metadata + store in db
     std::erase_if(videos, [&](VideoInfo& v) {
         if (!extract_info(v)) {
-            std::cerr << "Failed to extract media info skipping: " << v.path << "\n";
+            std::cerr << "Failed to extract info for: " << v.path << "\n";
             return true;
         }
         m_db.insertVideo(v);
         return false;
     });
 
-    // 4) Generate screenshots & pHashes
+    // screenshots + pHashes
     for (auto const& v : videos) {
         auto frames = decode_video_frames_as_cimg(v.path);
-        if (frames.empty()) {
-            std::cerr << "No frames extracted: " << v.path << "\n";
+        if (frames.empty())
             continue;
-        }
 
         auto hashes = generate_pHashes(frames);
-        if (hashes.empty()) {
-            std::cerr << "No hashes extracted: " << v.path << "\n";
+        if (hashes.empty())
             continue;
-        }
+
         m_db.insertAllHashes(v.id, hashes);
     }
 
-    // 5) Identify duplicates from DB
+    // find duplicates from full db
     auto allVideos = m_db.getAllVideos();
     auto hashGroups = m_db.getAllHashGroups();
 
-    auto duplicates = findDuplicates(std::move(allVideos),
-        hashGroups,
-        /*searchRange=*/4,
-        /*matchThreshold=*/5);
+    m_currentGroups = findDuplicates(std::move(allVideos), hashGroups, 4, 5);
 
-    ui.setDuplicateVideoGroups(duplicates);
+    // now broadcast them to the view
+    emit duplicateGroupsUpdated(m_currentGroups);
+}
+
+void VideoController::handleSelectOption(QString const& option)
+{
+    if (m_currentGroups.empty()) {
+        std::cerr << "[Warning] No groups loaded.\n";
+        return;
+    }
+
+    if (!m_model) {
+        std::cerr << "[Warning] No model set.\n";
+        return;
+    }
+
+    if (option == "exceptLargest") {
+        m_model->selectAllExceptLargest();
+    } else if (option == "exceptSmallest") {
+        m_model->selectAllExceptSmallest();
+    }
+}
+
+void VideoController::handleSortOption(QString const& option)
+{
+    if (!m_model)
+        return;
+
+    if (option == "size") {
+        m_model->sortVideosWithinGroupsBySize();
+    } else if (option == "createdAt") {
+        m_model->sortVideosWithinGroupsByCreatedAt();
+    }
+}
+
+void VideoController::handleSortGroupsOption(QString const& option)
+{
+    if (!m_model)
+        return;
+
+    if (option == "size") {
+        m_model->sortGroupsBySize();
+    } else if (option == "createdAt") {
+        m_model->sortGroupsByCreatedAt();
+    }
+}
+
+void VideoController::handleDeleteOption(QString const& option)
+{
+    if (!m_model)
+        return;
+
+    if (option == "list") {
+        m_model->deleteSelectedVideos();
+    }
+}
+
+void VideoController::setModel(VideoModel* model)
+{
+    if (!model) {
+        qWarning() << "Attempted to set nullptr model!";
+        return;
+    }
+    m_model = model;
 }

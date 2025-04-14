@@ -2,13 +2,9 @@
 
 #include <QAbstractTableModel>
 #include <vector>
+#include <optional>
+#include <QString>
 #include "VideoInfo.h"
-
-/*!
- * \brief The VideoModel class
- *        A QAbstractTableModel that holds a list of VideoInfo structs
- *        and displays them in columns for Screenshot, Path, Tech Specs, Codecs, #Links.
- */
 
 enum class RowType {
     Video,
@@ -18,9 +14,9 @@ enum class RowType {
 struct RowEntry {
     RowType type;
     std::optional<VideoInfo> video;
-    QString label; 
+    QString label;
+    bool selected = false;  
 };
-
 
 class VideoModel : public QAbstractTableModel
 {
@@ -38,18 +34,46 @@ public:
 
     explicit VideoModel(QObject* parent = nullptr);
 
+    // Show grouped videos with a separator row for each group
     void setGroupedVideos(std::vector<std::vector<VideoInfo>> const& groups);
 
-
-    // QAbstractItemModel interface overrides:
+    // QAbstractTableModel overrides
     int rowCount(const QModelIndex &parent = QModelIndex()) const override;
     int columnCount(const QModelIndex &parent = QModelIndex()) const override;
-    QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
+    QVariant data(const QModelIndex &index, int role) const override;
     QVariant headerData(int section, Qt::Orientation orientation,
                         int role = Qt::DisplayRole) const override;
+    Qt::ItemFlags flags(const QModelIndex &index) const override;
+
+    void selectAllExceptLargest();
+    void selectAllExceptSmallest();
+
+    void deleteSelectedVideos();  
+
+    void sortVideosWithinGroupsBySize();
+    void sortVideosWithinGroupsByCreatedAt();
+
+    void sortGroupsBySize();
+    void sortGroupsByCreatedAt();
+
+    // Data access
+    const RowEntry& rowEntry(int row) const;
 
 private:
     std::vector<RowEntry> m_rows;
+
+    // store the row index of each group’s separator row
+    // used if you want to know where each group starts
     std::vector<int> m_groupBoundaries;
+
+    void markAllExceptLargestInRange(int startRow, int endRow);
+    void markAllExceptSmallestInRange(int startRow, int endRow);
+
+    // re-group the data for internal sorts
+    std::vector<std::vector<VideoInfo>> toGroups() const;
+    void fromGroups(std::vector<std::vector<VideoInfo>> const& groups);
+
+    bool setData(const QModelIndex &index, const QVariant &value, int role) override;
+
 };
 

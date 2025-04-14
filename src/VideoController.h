@@ -1,24 +1,45 @@
 #pragma once
+
+#include <QObject>
 #include <vector>
 #include <filesystem>
+
 #include "MainWindow.h"
 #include "VideoInfo.h"
 #include "DatabaseManager.h"
 
-class VideoController
+class VideoController : public QObject
 {
-public:
-    VideoController(DatabaseManager& db);
+    Q_OBJECT
 
-    std::vector<VideoInfo> gatherVideos(std::filesystem::path const& root);
-    void removeAlreadyProcessed(std::vector<VideoInfo>& videos, std::vector<VideoInfo> const& existing);
-    bool fillMetadata(VideoInfo& v);
-    void storeVideoInDb(VideoInfo& v);
-    void generateScreenshotsAndHashes(std::vector<VideoInfo> const& videos);
-    std::vector<std::vector<VideoInfo>> detectDuplicates();
-    void runSearchAndDetection(MainWindow& ui);
+public:
+    explicit VideoController(DatabaseManager& db, QObject* parent = nullptr);
+
+    void runSearchAndDetection();
+
+    void handleSelectOption(const QString& option);
+    void handleSortOption(const QString& option);
+    void handleSortGroupsOption(const QString& option);
+    void handleDeleteOption(const QString& option);
+    void setModel(VideoModel* model);
+
+signals:
+    void duplicateGroupsUpdated(std::vector<std::vector<VideoInfo>> const& groups);
 
 private:
     DatabaseManager& m_db;
+
+    VideoModel* m_model = nullptr; 
+
+    std::vector<std::vector<VideoInfo>> m_currentGroups;
+
+    void deleteFromListOnly();
+    void deleteFromListAndDb();
+    void deleteFromDisk();
+
+    void sortBySize();
+    void sortByCreatedAt();
+
+    void sortGroupsBySize();
 };
 
