@@ -1,7 +1,14 @@
 #include "DecodingFrames.h"
 
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFileInfo>
 #include <iostream>
 #include <memory>
+#include <qdebug.h>
+#include <qglobal.h>
+#include <qimage.h>
+#include <qobject.h>
 #include <string>
 #include <vector>
 
@@ -58,6 +65,11 @@ void free_sws_ctx(SwsContext* ctx)
 {
     if (ctx)
         sws_freeContext(ctx);
+}
+
+QString hashPath(QString const& path)
+{
+    return QString(QCryptographicHash::hash(path.toUtf8(), QCryptographicHash::Sha1).toHex());
 }
 
 }
@@ -220,3 +232,144 @@ std::vector<CImg<float>> decode_video_frames_as_cimg(std::string const& file_pat
     return frames;
 }
 
+std::optional<QString> extract_color_thumbnail(std::string const& filePath)
+{
+    using FormatContextPtr = std::unique_ptr<AVFormatContext, decltype(&free_format_ctx)>;
+    using CodecContextPtr = std::unique_ptr<AVCodecContext, decltype(&free_codec_ctx)>;
+    using FramePtr = std::unique_ptr<AVFrame, decltype(&free_frame)>;
+    using PacketPtr = std::unique_ptr<AVPacket, decltype(&free_packet)>;
+    using SwsContextPtr = std::unique_ptr<SwsContext, decltype(&free_sws_ctx)>;
+
+    // 1) Open input
+    AVFormatContext* rawFmt = nullptr;
+    if (avformat_open_input(&rawFmt, filePath.c_str(), nullptr, nullptr) < 0) {
+        qWarning() << "[Error] Could not open input for thumbnail:" << QString::fromStdString(filePath);
+        return std::nullopt;
+    }
+    FormatContextPtr fmtCtx(rawFmt, free_format_ctx);
+
+    if (avformat_find_stream_info(fmtCtx.get(), nullptr) < 0) {
+        qWarning() << "[Error] Could not find stream info for thumbnail:" << QString::fromStdString(filePath);
+        return std::nullopt;
+    }
+
+    // 2) Find video stream
+    int videoStreamIndex = -1;
+    AVCodec const* codec = nullptr;
+    AVCodecParameters* codecParams = nullptr;
+
+    for (unsigned i = 0; i < fmtCtx->nb_streams; ++i) {
+        auto* st = fmtCtx->streams[i];
+        if (!st || !st->codecpar)
+            continue;
+        if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            codec = avcodec_find_decoder(st->codecpar->codec_id);
+            if (codec) {
+                codecParams = st->codecpar;
+                videoStreamIndex = static_cast<int>(i);
+                break;
+            }
+        }
+    }
+
+    if (videoStreamIndex == -1) {
+        qWarning() << "[Error] No video stream found in" << QString::fromStdString(filePath);
+        return std::nullopt;
+    }
+
+    // 3) Create and open codec context
+    CodecContextPtr codecCtx(avcodec_alloc_context3(codec), free_codec_ctx);
+    if (avcodec_parameters_to_context(codecCtx.get(), codecParams) < 0) {
+        qWarning() << "[Error] Failed to copy codec parameters for" << QString::fromStdString(filePath);
+        return std::nullopt;
+    }
+    if (avcodec_open2(codecCtx.get(), codec, nullptr) < 0) {
+        qWarning() << "[Error] Could not open codec for" << QString::fromStdString(filePath);
+        return std::nullopt;
+    }
+
+    // 4) Create swscale context
+    SwsContextPtr swsCtx(
+        sws_getContext(codecCtx->width,
+            codecCtx->height,
+            codecCtx->pix_fmt,
+            128,
+            128,
+            AV_PIX_FMT_RGB24,
+            SWS_BILINEAR,
+            nullptr,
+            nullptr,
+            nullptr),
+        free_sws_ctx);
+
+    if (!swsCtx) {
+        qWarning() << "[Error] Could not create SWS context for thumbnail";
+        return std::nullopt;
+    }
+
+    FramePtr frame(av_frame_alloc(), free_frame);
+    FramePtr frameRGB(av_frame_alloc(), free_frame);
+    PacketPtr packet(av_packet_alloc(), free_packet);
+
+    // Allocate buffers for frameRGB
+    int numBytes = av_image_get_buffer_size(AV_PIX_FMT_RGB24, 128, 128, 1);
+    std::vector<uint8_t> buffer(numBytes);
+
+    av_image_fill_arrays(frameRGB->data, frameRGB->linesize,
+        buffer.data(),
+        AV_PIX_FMT_RGB24,
+        128,
+        128,
+        1);
+
+    // 5) Read and process frames
+    bool gotThumbnail = false;
+    while (av_read_frame(fmtCtx.get(), packet.get()) >= 0 && !gotThumbnail) {
+        if (packet->stream_index == videoStreamIndex) {
+            if (avcodec_send_packet(codecCtx.get(), packet.get()) < 0)
+                break;
+
+            while (true) {
+                int ret = avcodec_receive_frame(codecCtx.get(), frame.get());
+                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+                    break;
+                else if (ret < 0) {
+                    qWarning() << "[Error] Error receiving thumbnail frame";
+                    break;
+                }
+
+                // Scale to RGB24 128x128
+                sws_scale(swsCtx.get(),
+                    frame->data,
+                    frame->linesize,
+                    0,
+                    codecCtx->height,
+                    frameRGB->data,
+                    frameRGB->linesize);
+
+                // Convert to QImage
+                QImage image(128, 128, QImage::Format_RGB888);
+                for (int y = 0; y < 128; ++y) {
+                    uint8_t* srcLine = frameRGB->data[0] + y * frameRGB->linesize[0];
+                    memcpy(image.scanLine(y), srcLine, 128 * 3);
+                }
+
+                // Save thumbnail
+                QString baseName = QFileInfo(QString::fromStdString(filePath)).baseName();
+                QString hash = hashPath(QString::fromStdString(filePath));
+                QString outDir = QDir::currentPath() + "/thumbnails";
+                QDir().mkpath(outDir);
+                QString thumbPath = outDir + "/" + baseName + "_" + hash.left(8) + "_thumb.jpg";
+
+                if (image.save(thumbPath, "JPEG")) {
+                    gotThumbnail = true;
+                    av_packet_unref(packet.get());
+                    return thumbPath;
+                }
+            }
+        }
+        av_packet_unref(packet.get());
+    }
+
+    return std::nullopt;
+}

@@ -110,12 +110,23 @@ QVariant VideoModel::data(QModelIndex const& index, int role) const
             return vid.num_hard_links;
         }
     } else if (role == Qt::DecorationRole && index.column() == Col_Screenshot) {
-        static QPixmap placeholder("sneed.png");
-        if (!placeholder.isNull()) {
-            QPixmap scaled = placeholder.scaled(128, 128, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-            return QIcon(scaled);
+        auto const& vid = row.video.value();
+
+        // If we have a valid thumbnail path, try loading
+        if (!vid.thumbnail_path.empty()) {
+            QString thumbPath = QString::fromStdString(vid.thumbnail_path);
+            QPixmap pix(thumbPath);
+            if (!pix.isNull()) {
+                QPixmap scaled = pix.scaled(128, 128, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                return QIcon(scaled);
+            }
         }
-    } else if (role == Qt::TextAlignmentRole && index.column() == Col_Screenshot) {
+        // Fallback icon if no valid thumbnail
+        // (You can create a QIcon(":/resources/placeholder.png") or simply return QVariant())
+        return {};
+    }
+
+    else if (role == Qt::TextAlignmentRole && index.column() == Col_Screenshot) {
         // center screenshot
         return Qt::AlignCenter;
     }

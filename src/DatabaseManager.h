@@ -35,8 +35,8 @@ public:
                 path, created_at, modified_at, 
                 video_codec, audio_codec, width, height, 
                 duration, size, bit_rate, num_hard_links, 
-                inode, device, sample_rate_avg, avg_frame_rate
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
+                inode, device, sample_rate_avg, avg_frame_rate, thumbnail_path
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
         )";
 
         sqlite3_stmt* stmt = nullptr;
@@ -45,21 +45,22 @@ public:
             return;
         }
 
-        sqlite3_bind_text (stmt,   1, video.path.c_str(),        -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text (stmt,   2, video.created_at.c_str(),  -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text (stmt,   3, video.modified_at.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text (stmt,   4, video.video_codec.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text (stmt,   5, video.audio_codec.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int  (stmt,   6, video.width);
-        sqlite3_bind_int  (stmt,   7, video.height);
-        sqlite3_bind_int  (stmt,   8, video.duration);
-        sqlite3_bind_int  (stmt,   9, video.size);
-        sqlite3_bind_int  (stmt,  10, video.bit_rate);
-        sqlite3_bind_int  (stmt,  11, video.num_hard_links);
-        sqlite3_bind_int64(stmt,  12, static_cast<sqlite3_int64>(video.inode));
-        sqlite3_bind_int64(stmt,  13, static_cast<sqlite3_int64>(video.device));
-        sqlite3_bind_int  (stmt,  14, video.sample_rate_avg);
-        sqlite3_bind_double(stmt, 15, video.avg_frame_rate);
+        sqlite3_bind_text  (stmt,   1, video.path.c_str(),        -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text  (stmt,   2, video.created_at.c_str(),  -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text  (stmt,   3, video.modified_at.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text  (stmt,   4, video.video_codec.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text  (stmt,   5, video.audio_codec.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int   (stmt,   6, video.width);
+        sqlite3_bind_int   (stmt,   7, video.height);
+        sqlite3_bind_int   (stmt,   8, video.duration);
+        sqlite3_bind_int   (stmt,   9, video.size);
+        sqlite3_bind_int   (stmt,  10, video.bit_rate);
+        sqlite3_bind_int   (stmt,  11, video.num_hard_links);
+        sqlite3_bind_int64 (stmt,  12, static_cast<sqlite3_int64>(video.inode));
+        sqlite3_bind_int64 (stmt,  13, static_cast<sqlite3_int64>(video.device));
+        sqlite3_bind_int   (stmt,  14, video.sample_rate_avg);
+        sqlite3_bind_double(stmt,  15, video.avg_frame_rate);
+        sqlite3_bind_text  (stmt,  16, video.thumbnail_path.c_str(), -1, SQLITE_TRANSIENT);
 
         if (sqlite3_step(stmt) != SQLITE_DONE) {
             std::cerr << "[DB] Failed to insert video: " << sqlite3_errmsg(m_db) << "\n";
@@ -111,7 +112,7 @@ public:
             SELECT id, path, created_at, modified_at,
                    video_codec, audio_codec, width, height,
                    duration, size, bit_rate, num_hard_links,
-                   inode, device, sample_rate_avg, avg_frame_rate
+                   inode, device, sample_rate_avg, avg_frame_rate, thumbnail_path
             FROM video
             ORDER BY id ASC;
         )";
@@ -140,6 +141,8 @@ public:
             v.device           = static_cast<long>(sqlite3_column_int64(stmt, 13));
             v.sample_rate_avg  = sqlite3_column_int(stmt, 14);
             v.avg_frame_rate   = sqlite3_column_double(stmt, 15);
+            const char* thumbPtr = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 16));
+            v.thumbnail_path = thumbPtr ? thumbPtr : "";
 
             results.push_back(std::move(v));
         }
@@ -205,7 +208,8 @@ private:
                 inode INTEGER,
                 device INTEGER,
                 sample_rate_avg INTEGER,
-                avg_frame_rate REAL
+                avg_frame_rate REAL,
+                thumbnail_path TEXT
             );
         )";
 

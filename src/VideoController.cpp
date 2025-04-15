@@ -5,9 +5,7 @@
 #include "FileSystemSearch.h"
 #include "VideoModel.h"
 #include <QDebug>
-#include <algorithm>
 #include <iostream>
-#include <numeric>
 
 VideoController::VideoController(DatabaseManager& db, QObject* parent)
     : QObject(parent)
@@ -42,6 +40,12 @@ void VideoController::runSearchAndDetection()
         if (!extract_info(v)) {
             std::cerr << "Failed to extract info for: " << v.path << "\n";
             return true;
+        }
+
+        if (auto opt = extract_color_thumbnail(v.path)) {
+            v.thumbnail_path = opt->toStdString();
+        } else {
+            v.thumbnail_path = "./sneed.png";
         }
         m_db.insertVideo(v);
         return false;
