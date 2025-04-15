@@ -1,5 +1,6 @@
 .cache/
 build/
 videos/
+videos_copy/
 videos.db
 *.png

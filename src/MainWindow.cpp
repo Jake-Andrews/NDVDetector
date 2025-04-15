@@ -73,12 +73,12 @@ void MainWindow::onSelectClicked()
 
     QAction* chosen = menu.exec(QCursor::pos());
     if (!chosen)
-        return; // user canceled
+        return;
 
     if (chosen == exceptLargest) {
-        emit selectOptionChosen("exceptLargest");
+        emit selectOptionChosen(SelectOptions::AllExceptLargest);
     } else if (chosen == exceptSmallest) {
-        emit selectOptionChosen("exceptSmallest");
+        emit selectOptionChosen(SelectOptions::AllExceptSmallest);
     }
 }
 
@@ -93,9 +93,9 @@ void MainWindow::onSortClicked()
         return;
 
     if (chosen == sortBySize) {
-        emit sortOptionChosen("size");
+        emit sortOptionChosen(SortOptions::Size);
     } else if (chosen == sortByCreatedAt) {
-        emit sortOptionChosen("createdAt");
+        emit sortOptionChosen(SortOptions::CreatedAt);
     }
 }
 
@@ -103,13 +103,16 @@ void MainWindow::onSortGroupsClicked()
 {
     QMenu menu(this);
     QAction* sortGroupsBySize = menu.addAction("Sort Groups By Size");
+    QAction* sortGroupsByCreated = menu.addAction("Sort Groups By CreatedAt");
 
     QAction* chosen = menu.exec(QCursor::pos());
     if (!chosen)
         return;
 
     if (chosen == sortGroupsBySize) {
-        emit sortGroupsOptionChosen("size");
+        emit sortGroupsOptionChosen(SortOptions::Size);
+    } else if (chosen == sortGroupsByCreated) {
+        emit sortGroupsOptionChosen(SortOptions::CreatedAt);
     }
 }
 
@@ -125,10 +128,10 @@ void MainWindow::onDeleteClicked()
         return;
 
     if (chosen == delFromList) {
-        emit deleteOptionChosen("list");
+        emit deleteOptionChosen(DeleteOptions::List);
     } else if (chosen == delListAndDb) {
-        emit deleteOptionChosen("list+db");
+        emit deleteOptionChosen(DeleteOptions::ListDB);
     } else if (chosen == delFromDisk) {
-        emit deleteOptionChosen("disk");
+        emit deleteOptionChosen(DeleteOptions::Disk);
     }
 }

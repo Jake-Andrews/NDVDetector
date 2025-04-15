@@ -8,30 +8,51 @@ int main(int argc, char* argv[])
 {
     QApplication app(argc, argv);
 
+    qRegisterMetaType<MainWindow::DeleteOptions>("MainWindow::DeleteOptions");
+    qRegisterMetaType<MainWindow::SelectOptions>("MainWindow::SelectOptions");
+    qRegisterMetaType<MainWindow::SortOptions>("MainWindow::SortOptions");
+
     DatabaseManager db("videos.db");
     VideoController controller(db);
 
     MainWindow w;
     controller.setModel(w.model());
-    // Connect the controller's signal to the MainWindow slot
+
+    bool ascendingSort = true;
+    bool ascendingGroupSort = true;
+
     QObject::connect(&controller,
         &VideoController::duplicateGroupsUpdated,
         &w,
         &MainWindow::onDuplicateGroupsUpdated);
 
-    // Connect the MainWindow signals to the controller
     QObject::connect(&w, &MainWindow::searchTriggered, [&] {
         controller.runSearchAndDetection();
     });
+
     QObject::connect(&w, &MainWindow::selectOptionChosen,
-        [&](QString option) { controller.handleSelectOption(option); });
+        [&](MainWindow::SelectOptions option) {
+            controller.handleSelectOption(option);
+        });
+
     QObject::connect(&w, &MainWindow::sortOptionChosen,
-        [&](QString option) { controller.handleSortOption(option); });
+        [&](MainWindow::SortOptions option) {
+            controller.handleSortOption(option, ascendingSort);
+            ascendingSort = !ascendingSort;
+        });
+
     QObject::connect(&w, &MainWindow::sortGroupsOptionChosen,
-        [&](QString option) { controller.handleSortGroupsOption(option); });
+        [&](MainWindow::SortOptions option) {
+            controller.handleSortGroupsOption(option, ascendingGroupSort);
+            ascendingGroupSort = !ascendingGroupSort;
+        });
+
     QObject::connect(&w, &MainWindow::deleteOptionChosen,
-        [&](QString option) { controller.handleDeleteOption(option); });
+        [&](MainWindow::DeleteOptions option) {
+            controller.handleDeleteOption(option);
+        });
 
     w.show();
     return app.exec();
 }
+

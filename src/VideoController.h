@@ -2,7 +2,6 @@
 
 #include <QObject>
 #include <vector>
-#include <filesystem>
 
 #include "MainWindow.h"
 #include "VideoInfo.h"
@@ -17,10 +16,10 @@ public:
 
     void runSearchAndDetection();
 
-    void handleSelectOption(const QString& option);
-    void handleSortOption(const QString& option);
-    void handleSortGroupsOption(const QString& option);
-    void handleDeleteOption(const QString& option);
+    void handleSelectOption(MainWindow::SelectOptions option);
+    void handleSortOption(MainWindow::SortOptions option, bool ascending);
+    void handleSortGroupsOption(MainWindow::SortOptions option, bool ascending);
+    void handleDeleteOption(MainWindow::DeleteOptions option);
     void setModel(VideoModel* model);
 
 signals:

@@ -22,15 +22,37 @@ public:
     void setDuplicateVideoGroups(std::vector<std::vector<VideoInfo>> const& groups);
     VideoModel* model() const {return m_model.get();};
 
+    enum DeleteOptions {
+        List, 
+        ListDB,
+        Disk
+    };
+    Q_ENUM(DeleteOptions);
+
+    // **Provide an option that takes into account estimated quality**
+    // Example: 265 2GB vs 264 2.4GB, 265 2GB is higher "quality"
+    enum SelectOptions { 
+        AllExceptLargest,
+        AllExceptSmallest, 
+        Smallest, 
+        Largest, 
+    };
+    Q_ENUM(SelectOptions);
+
+    enum SortOptions {
+        Size,
+        CreatedAt
+    };
+    Q_ENUM(SortOptions);
+
 signals:
     void searchTriggered();
-    void selectOptionChosen(QString option);
-    void sortOptionChosen(QString option);
-    void sortGroupsOptionChosen(QString option);
-    void deleteOptionChosen(QString option);
+    void selectOptionChosen(MainWindow::SelectOptions option);
+    void sortOptionChosen(MainWindow::SortOptions option);
+    void sortGroupsOptionChosen(MainWindow::SortOptions option);
+    void deleteOptionChosen(MainWindow::DeleteOptions option);
 
 public slots:
-    // Called when the controller finishes detecting duplicates
     void onDuplicateGroupsUpdated(std::vector<std::vector<VideoInfo>> const& groups);
 
 private slots:

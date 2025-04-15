@@ -50,11 +50,11 @@ public:
 
     void deleteSelectedVideos();  
 
-    void sortVideosWithinGroupsBySize();
-    void sortVideosWithinGroupsByCreatedAt();
+    void sortVideosWithinGroupsBySize(bool ascending);
+    void sortVideosWithinGroupsByCreatedAt(bool ascending);
 
-    void sortGroupsBySize();
-    void sortGroupsByCreatedAt();
+    void sortGroupsBySize(bool ascending);
+    void sortGroupsByCreatedAt(bool ascending);
 
     // Data access
     const RowEntry& rowEntry(int row) const;

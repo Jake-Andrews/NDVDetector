@@ -334,89 +334,75 @@ void VideoModel::deleteSelectedVideos()
     endResetModel();
 }
 
-void VideoModel::sortVideosWithinGroupsBySize()
+void VideoModel::sortVideosWithinGroupsBySize(bool ascending)
 {
     // Flatten each group, sort within group by size, rebuild
     auto groups = toGroups();
 
     for (auto& g : groups) {
         std::sort(g.begin(), g.end(),
-            [](VideoInfo const& a, VideoInfo const& b) {
-                return a.size < b.size;
+            [ascending](VideoInfo const& a, VideoInfo const& b) {
+                return ascending ? a.size < b.size : a.size > b.size;
             });
     }
     setGroupedVideos(groups);
 }
 
-void VideoModel::sortVideosWithinGroupsByCreatedAt()
+static int64_t safeStoll(std::string const& str)
+{
+    return std::stoll(str.empty() ? "0" : str);
+}
+
+void VideoModel::sortVideosWithinGroupsByCreatedAt(bool ascending)
 {
     auto groups = toGroups();
     for (auto& g : groups) {
         std::sort(g.begin(), g.end(),
-            [](auto const& a, auto const& b) {
-                auto atA = std::stoll(a.created_at.empty() ? "0" : a.created_at);
-                auto atB = std::stoll(b.created_at.empty() ? "0" : b.created_at);
-
-                return atA < atB;
+            [ascending](auto const& a, auto const& b) {
+                auto atA = safeStoll(a.created_at);
+                auto atB = safeStoll(b.created_at);
+                return ascending ? atA < atB : atA > atB;
             });
     }
-
     setGroupedVideos(groups);
 }
 
-void VideoModel::sortGroupsBySize()
+void VideoModel::sortGroupsBySize(bool ascending)
 {
-    // Sum each group by size
     auto groups = toGroups();
     std::sort(groups.begin(), groups.end(),
-        [](auto const& g1, auto const& g2) {
-            auto sum1 = std::accumulate(g1.begin(), g1.end(), (int64_t)0,
+        [ascending](auto const& g1, auto const& g2) {
+            auto sum1 = std::accumulate(g1.begin(), g1.end(), int64_t { 0 },
                 [](int64_t s, auto const& v) { return s + v.size; });
-            auto sum2 = std::accumulate(g2.begin(), g2.end(), (int64_t)0,
+            auto sum2 = std::accumulate(g2.begin(), g2.end(), int64_t { 0 },
                 [](int64_t s, auto const& v) { return s + v.size; });
-
-            return sum1 < sum2;
+            return ascending ? sum1 < sum2 : sum1 > sum2;
         });
-
     setGroupedVideos(groups);
 }
 
-void VideoModel::sortGroupsByCreatedAt()
+void VideoModel::sortGroupsByCreatedAt(bool ascending)
 {
-    // sum each group by earliest or latest creation date? Up to you
-    // We'll do earliest for demonstration
     auto groups = toGroups();
     std::sort(groups.begin(), groups.end(),
-
-        [](auto const& g1, auto const& g2) {
+        [ascending](auto const& g1, auto const& g2) {
             if (g1.empty())
-                return true; // place empty first
+                return true;
             if (g2.empty())
                 return false;
 
-            // compare earliest created_at in each group
-            auto minA = std::min_element(g1.begin(), g1.end(),
+            auto valA = std::stoll(std::min_element(g1.begin(), g1.end(),
                 [](auto const& a, auto const& b) {
-                    auto atA = std::stoll(a.created_at.empty() ? "0" : a.created_at);
-                    auto atB = std::stoll(b.created_at.empty() ? "0" : b.created_at);
+                    return std::stoll(a.created_at.empty() ? "0" : a.created_at) < std::stoll(b.created_at.empty() ? "0" : b.created_at);
+                })->created_at);
 
-                    return atA < atB;
-                });
-
-            auto minB = std::min_element(g2.begin(), g2.end(),
+            auto valB = std::stoll(std::min_element(g2.begin(), g2.end(),
                 [](auto const& a, auto const& b) {
-                    auto atA = std::stoll(a.created_at.empty() ? "0" : a.created_at);
-                    auto atB = std::stoll(b.created_at.empty() ? "0" : b.created_at);
+                    return std::stoll(a.created_at.empty() ? "0" : a.created_at) < std::stoll(b.created_at.empty() ? "0" : b.created_at);
+                })->created_at);
 
-                    return atA < atB;
-                });
-
-            auto valA = std::stoll(minA->created_at.empty() ? "0" : minA->created_at);
-            auto valB = std::stoll(minB->created_at.empty() ? "0" : minB->created_at);
-
-            return valA < valB;
+            return ascending ? valA < valB : valA > valB;
         });
-
     setGroupedVideos(groups);
 }
 
@@ -456,4 +442,3 @@ void VideoModel::fromGroups(std::vector<std::vector<VideoInfo>> const& groups)
 {
     setGroupedVideos(groups);
 }
-

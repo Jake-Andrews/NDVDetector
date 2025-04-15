@@ -70,57 +70,57 @@ void VideoController::runSearchAndDetection()
     emit duplicateGroupsUpdated(m_currentGroups);
 }
 
-void VideoController::handleSelectOption(QString const& option)
+void VideoController::handleSelectOption(MainWindow::SelectOptions option)
 {
-    if (m_currentGroups.empty()) {
-        std::cerr << "[Warning] No groups loaded.\n";
+    if (!m_model)
         return;
-    }
 
-    if (!m_model) {
-        std::cerr << "[Warning] No model set.\n";
-        return;
-    }
-
-    if (option == "exceptLargest") {
+    switch (option) {
+    case MainWindow::SelectOptions::AllExceptLargest:
         m_model->selectAllExceptLargest();
-    } else if (option == "exceptSmallest") {
+        break;
+    case MainWindow::SelectOptions::AllExceptSmallest:
         m_model->selectAllExceptSmallest();
+        break;
+    default:
+        qWarning() << "Unhandled SelectOptions";
+        break;
     }
 }
 
-void VideoController::handleSortOption(QString const& option)
+void VideoController::handleSortOption(MainWindow::SortOptions option, bool ascending)
 {
     if (!m_model)
         return;
 
-    if (option == "size") {
-        m_model->sortVideosWithinGroupsBySize();
-    } else if (option == "createdAt") {
-        m_model->sortVideosWithinGroupsByCreatedAt();
-    }
+    if (option == MainWindow::SortOptions::Size)
+        m_model->sortVideosWithinGroupsBySize(ascending);
+    else if (option == MainWindow::SortOptions::CreatedAt)
+        m_model->sortVideosWithinGroupsByCreatedAt(ascending);
 }
 
-void VideoController::handleSortGroupsOption(QString const& option)
+void VideoController::handleSortGroupsOption(MainWindow::SortOptions option, bool ascending)
 {
     if (!m_model)
         return;
 
-    if (option == "size") {
-        m_model->sortGroupsBySize();
-    } else if (option == "createdAt") {
-        m_model->sortGroupsByCreatedAt();
-    }
+    if (option == MainWindow::SortOptions::Size)
+        m_model->sortGroupsBySize(ascending);
+    else if (option == MainWindow::SortOptions::CreatedAt)
+        m_model->sortGroupsByCreatedAt(ascending);
 }
 
-void VideoController::handleDeleteOption(QString const& option)
+void VideoController::handleDeleteOption(MainWindow::DeleteOptions option)
 {
     if (!m_model)
         return;
 
-    if (option == "list") {
+    if (option == MainWindow::DeleteOptions::List)
         m_model->deleteSelectedVideos();
-    }
+    else if (option == MainWindow::DeleteOptions::ListDB)
+        qDebug() << "[TODO] Delete from DB not yet implemented";
+    else if (option == MainWindow::DeleteOptions::Disk)
+        qDebug() << "[TODO] Delete from disk not yet implemented";
 }
 
 void VideoController::setModel(VideoModel* model)
