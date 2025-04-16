@@ -334,17 +334,15 @@ int ph_dct_imagehash(const char *file, ulong64 &hash) {
     } catch (CImgIOException &ex) {
         return -1;
     }
+
     CImg<float> meanfilter(7, 7, 1, 1, 1);
     CImg<float> img;
-    if (src.spectrum() == 3) {
-        img = src.RGBtoYCbCr().channel(0).get_convolve(meanfilter);
-    } else if (src.spectrum() == 4) {
-        int width = src.width();
-        int height = src.height();
-        img = src.crop(0, 0, 0, 0, width - 1, height - 1, 0, 2)
-                  .RGBtoYCbCr()
-                  .channel(0)
-                  .get_convolve(meanfilter);
+
+    // If 3 or 4 channels then discard the alpha channel if present
+    // then convert to YcbCr and take the Y channel
+    if (src.spectrum() >= 3) {
+        CImg<float> rgb = src.get_channels(0, 2).RGBtoYCbCr().channel(0);
+        img = rgb.get_convolve(meanfilter);
     } else {
         img = src.channel(0).get_convolve(meanfilter);
     }
