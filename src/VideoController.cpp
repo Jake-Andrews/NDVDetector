@@ -1,12 +1,8 @@
 #include "VideoController.h"
-#include "DecodingFrames.h"
-#include "DuplicateDetector.h"
-#include "FFProbeExtractor.h"
-#include "FileSystemSearch.h"
 #include "SearchWorker.h"
 #include "VideoModel.h"
 
-#include <iostream>
+#include <filesystem>
 
 #include <QDebug>
 #include <QMessageBox>

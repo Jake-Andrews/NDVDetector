@@ -14,6 +14,8 @@ SearchWorker::SearchWorker(DatabaseManager& db, QStringList directories, QObject
 {
 }
 
+static double const SKIP_PERCENT = 0.15;
+
 void SearchWorker::process()
 {
     try {
@@ -80,7 +82,7 @@ void SearchWorker::doExtractionAndDetection(std::vector<VideoInfo>& videos)
 
     // screenshots + pHashes
     for (auto const& v : videos) {
-        auto frames = decode_video_frames_as_cimg(v.path);
+        auto frames = decode_video_frames_as_cimg(v.path, SKIP_PERCENT, v.duration);
         if (frames.empty()) {
             hashedCount++;
             emit hashingProgress(hashedCount, totalToHash);

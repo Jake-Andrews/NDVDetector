@@ -24,16 +24,6 @@ extern "C" {
 
 namespace {
 
-void logf(char const* fmt, ...)
-{
-    va_list args;
-    std::fprintf(stderr, "LOG: ");
-    va_start(args, fmt);
-    std::vfprintf(stderr, fmt, args);
-    va_end(args);
-    std::fprintf(stderr, "\n");
-}
-
 std::string av_err_to_string(int errnum)
 {
     char buffer[AV_ERROR_MAX_STRING_SIZE];
@@ -75,7 +65,10 @@ QString hashPath(QString const& path)
 }
 
 // **Fix: Support for channels**
-std::vector<CImg<float>> decode_video_frames_as_cimg(std::string const& file_path)
+std::vector<CImg<float>> decode_video_frames_as_cimg(
+    std::string const& file_path,
+    double skip_percent,
+    double video_duration_sec)
 {
     using FormatContextPtr = std::unique_ptr<AVFormatContext, decltype(&free_format_ctx)>;
     using CodecContextPtr = std::unique_ptr<AVCodecContext, decltype(&free_codec_ctx)>;
@@ -85,49 +78,44 @@ std::vector<CImg<float>> decode_video_frames_as_cimg(std::string const& file_pat
 
     std::vector<CImg<float>> frames;
 
-    logf("Opening input file: %s", file_path.c_str());
-
-    // 1) Open file
-    AVFormatContext* rawCtx = nullptr;
-    if (avformat_open_input(&rawCtx, file_path.c_str(), nullptr, nullptr) < 0) {
+    // 2) Open the input file
+    AVFormatContext* rawFmtCtx = nullptr;
+    if (avformat_open_input(&rawFmtCtx, file_path.c_str(), nullptr, nullptr) < 0) {
         std::cerr << "[Error] Failed to open input file: " << file_path << "\n";
         return {};
     }
+    FormatContextPtr formatCtx(rawFmtCtx, free_format_ctx);
 
-    FormatContextPtr formatCtx(rawCtx, free_format_ctx);
-
-    // 2) Gather stream info
+    // 3) Read stream info
     if (avformat_find_stream_info(formatCtx.get(), nullptr) < 0) {
-        std::cerr << "[Error] Failed to find stream info: " << file_path << "\n";
+        std::cerr << "[Error] Failed to find stream info in: " << file_path << "\n";
         return {};
     }
 
+    // 4) Find video stream
     AVCodec const* codec = nullptr;
     AVCodecParameters* codecParams = nullptr;
     int videoStreamIndex = -1;
 
-    // 3) Find video stream
     for (unsigned int i = 0; i < formatCtx->nb_streams; ++i) {
         auto* stream = formatCtx->streams[i];
         if (!stream || !stream->codecpar)
             continue;
-        auto* localCodec = avcodec_find_decoder(stream->codecpar->codec_id);
-        if (!localCodec)
-            continue;
-
         if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-            videoStreamIndex = static_cast<int>(i);
-            codec = localCodec;
-            codecParams = stream->codecpar;
-            break;
+            codec = avcodec_find_decoder(stream->codecpar->codec_id);
+            if (codec) {
+                codecParams = stream->codecpar;
+                videoStreamIndex = static_cast<int>(i);
+                break;
+            }
         }
     }
     if (videoStreamIndex == -1) {
-        std::cerr << "[Error] No video stream found in file: " << file_path << "\n";
+        std::cerr << "[Error] No video stream found.\n";
         return {};
     }
 
-    // 4) Allocate and open codec
+    // 5) Create and open codec context
     CodecContextPtr codecCtx(avcodec_alloc_context3(codec), free_codec_ctx);
     if (!codecCtx) {
         std::cerr << "[Error] Failed to allocate AVCodecContext.\n";
@@ -142,93 +130,150 @@ std::vector<CImg<float>> decode_video_frames_as_cimg(std::string const& file_pat
         return {};
     }
 
-    SwsContextPtr swsCtx(sws_getContext(codecCtx->width, codecCtx->height, codecCtx->pix_fmt, 32, 32, AV_PIX_FMT_GRAY8, SWS_BILINEAR, nullptr, nullptr, nullptr), free_sws_ctx);
+    // 6) Calculate skip intervals
+    double start_time_sec = video_duration_sec * skip_percent;
+    double end_time_sec = video_duration_sec * (1.0 - skip_percent);
+    std::cout << "[INFO] skip_percent: " << skip_percent << ", video_duration_sec: " << video_duration_sec << ", start_time_sec: " << start_time_sec << ", end_time_sec: " << end_time_sec << "\n";
+    AVRational time_base = formatCtx->streams[videoStreamIndex]->time_base;
+
+    // 7) Seek to start_time_sec
+    int64_t seek_target = static_cast<int64_t>(start_time_sec / av_q2d(time_base));
+    if (av_seek_frame(formatCtx.get(), videoStreamIndex, seek_target, AVSEEK_FLAG_BACKWARD) < 0) {
+        std::cerr << "[Warn] Failed to seek to start_time_sec: " << start_time_sec << "s\n";
+    } else {
+        avcodec_flush_buffers(codecCtx.get());
+    }
+
+    // 8) Create swscale context to go from codecCtx->pix_fmt -> 32×32 grayscale
+    SwsContextPtr swsCtx(
+        sws_getContext(codecCtx->width,
+            codecCtx->height,
+            codecCtx->pix_fmt,
+            32,
+            32,
+            AV_PIX_FMT_GRAY8,
+            SWS_BILINEAR,
+            nullptr,
+            nullptr,
+            nullptr),
+        free_sws_ctx);
     if (!swsCtx) {
         std::cerr << "[Error] Failed to create SwsContext.\n";
-    }
-
-    // 5) Allocate frame & packet
-    FramePtr frame(av_frame_alloc(), free_frame);
-    if (!frame) {
-        std::cerr << "[Error] Failed to allocate frame.\n";
-        return {};
-    }
-    frame->format = AV_PIX_FMT_GRAY8;
-    frame->width = 32;
-    frame->height = 32;
-    if (av_frame_get_buffer(frame.get(), 0) < 0) {
-        std::cerr << "[Error] Failed to allocate buffer for scaled frame.\n";
         return {};
     }
 
+    // 9) Create two frames:
+    //    - decodeFrame: the one FFmpeg writes decoded data into
+    //    - scaledFrame: the 32×32 grayscale we own
+    FramePtr decodeFrame(av_frame_alloc(), free_frame);
+    if (!decodeFrame) {
+        std::cerr << "[Error] Failed to allocate decodeFrame.\n";
+        return {};
+    }
+
+    FramePtr scaledFrame(av_frame_alloc(), free_frame);
+    if (!scaledFrame) {
+        std::cerr << "[Error] Failed to allocate scaledFrame.\n";
+        return {};
+    }
+
+    // Fill in the scaledFrame fields and allocate its buffers
+    scaledFrame->format = AV_PIX_FMT_GRAY8; // match swsCtx output
+    scaledFrame->width = 32;
+    scaledFrame->height = 32;
+    if (av_frame_get_buffer(scaledFrame.get(), 0) < 0) {
+        std::cerr << "[Error] Failed to allocate buffer for scaledFrame.\n";
+        return {};
+    }
+
+    // 10) Create packet
     PacketPtr packet(av_packet_alloc(), free_packet);
     if (!packet) {
-        std::cerr << "[Error] Failed to allocate packet.\n";
+        std::cerr << "[Error] Failed to allocate AVPacket.\n";
         return {};
     }
 
+    // 11) Reading + decoding loop
     double lastCaptureTime = -1.0;
     int framesCaptured = 0;
     constexpr int maxFramesToSave = 100;
-    auto const timeBase = formatCtx->streams[videoStreamIndex]->time_base;
 
-    // 6) Read and decode frames
-    while (av_read_frame(formatCtx.get(), packet.get()) >= 0 && framesCaptured < maxFramesToSave) {
+    while (av_read_frame(formatCtx.get(), packet.get()) >= 0) {
         if (packet->stream_index == videoStreamIndex) {
+            // Send packet for decoding
             int ret = avcodec_send_packet(codecCtx.get(), packet.get());
             if (ret < 0) {
-                logf("Error sending packet: %s", av_err_to_string(ret).c_str());
+                std::cerr << "[Error] avcodec_send_packet: " << av_err_to_string(ret) << "\n";
                 break;
             }
 
-            while (ret >= 0) {
-                ret = avcodec_receive_frame(codecCtx.get(), frame.get());
+            // Receive all available frames from decoder
+            while (true) {
+                ret = avcodec_receive_frame(codecCtx.get(), decodeFrame.get());
                 if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-                    break; // Need more packets or end of file
+                    break; // need more data or finished
                 }
                 if (ret < 0) {
-                    logf("Error receiving frame: %s", av_err_to_string(ret).c_str());
+                    std::cerr << "[Error] avcodec_receive_frame: " << av_err_to_string(ret) << "\n";
                     break;
                 }
 
-                double framePtsSec = frame->pts * av_q2d(timeBase);
+                double framePtsSec = decodeFrame->pts * av_q2d(time_base);
 
-                // Capture 1 frame every ~1 second
+                // Check if we passed the end_time or haven't reached start_time
+                if (framePtsSec < start_time_sec) {
+                    continue; // skip early frames
+                }
+                if (framePtsSec > end_time_sec) {
+                    // We can cleanly stop reading
+                    goto doneDecoding;
+                }
+
+                // Capture 1 frame per ~1 second
                 if ((framePtsSec - lastCaptureTime) >= 1.0 || lastCaptureTime < 0.0) {
                     lastCaptureTime = framePtsSec;
 
-                    logf("Capturing frame at %.2f sec (frame_num=%d, format=%d)",
-                        framePtsSec, codecCtx->frame_num, frame->format);
-
+                    // Scale from decodeFrame into scaledFrame
                     sws_scale(
                         swsCtx.get(),
-                        frame->data,
-                        frame->linesize,
+                        decodeFrame->data,
+                        decodeFrame->linesize,
                         0,
-                        frame->height,
-                        frame->data,
-                        frame->linesize);
+                        decodeFrame->height,
+                        scaledFrame->data,
+                        scaledFrame->linesize);
 
-                    // Now build a CImg from frame
+                    // Copy scaledFrame->data into a CImg<float>
                     CImg<float> img(32, 32, 1, 1, 0.0f);
-                    uint8_t const* basePtr = frame->data[0];
-                    int lineSize = frame->linesize[0];
-
+                    uint8_t const* basePtr = scaledFrame->data[0];
+                    int lineSize = scaledFrame->linesize[0];
                     for (int row = 0; row < 32; ++row) {
-                        auto const* src = basePtr + row * lineSize;
+                        auto src = basePtr + row * lineSize;
                         for (int col = 0; col < 32; ++col) {
                             img(col, row) = static_cast<float>(src[col]);
                         }
                     }
+
                     frames.push_back(std::move(img));
-                    framesCaptured++;
+                    ++framesCaptured;
+
+                    // Avoid capturing too many frames
+                    if (framesCaptured >= maxFramesToSave) {
+                        goto doneDecoding;
+                    }
                 }
             }
         }
+
         av_packet_unref(packet.get());
     }
 
-    logf("Captured %d frames at ~1s intervals", framesCaptured);
+doneDecoding:
+    av_packet_unref(packet.get());
+    std::cerr << "Captured " << framesCaptured << " frames between "
+              << (skip_percent * 100.0) << "% and "
+              << ((1.0 - skip_percent) * 100.0) << "% of the video.\n";
+
     return frames;
 }
 
