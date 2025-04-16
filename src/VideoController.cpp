@@ -119,12 +119,63 @@ void VideoController::handleDeleteOption(MainWindow::DeleteOptions option)
     if (!m_model)
         return;
 
-    if (option == MainWindow::DeleteOptions::List)
-        m_model->deleteSelectedVideos();
-    else if (option == MainWindow::DeleteOptions::ListDB)
-        qDebug() << "[TODO] Delete from DB not yet implemented";
-    else if (option == MainWindow::DeleteOptions::Disk)
-        qDebug() << "[TODO] Delete from disk not yet implemented";
+    switch (option) {
+    case MainWindow::DeleteOptions::List: {
+        m_model->deleteSelectedVideosFromList();
+        break;
+    }
+    case MainWindow::DeleteOptions::ListDB: {
+        // 1) gather all selected videos
+        auto selected = m_model->selectedVideos();
+        // 2) delete them from DB
+        for (auto const& v : selected) {
+            if (v.id > 0) {
+                m_db.deleteVideo(v.id);
+            }
+        }
+        // 3) remove from model
+        std::vector<int> videoIds;
+        videoIds.reserve(selected.size());
+        for (auto const& vid : selected) {
+            videoIds.push_back(vid.id);
+        }
+        m_model->removeVideosFromModel(videoIds);
+        break;
+    }
+    case MainWindow::DeleteOptions::Disk: {
+        // 1) gather all selected videos
+        auto selected = m_model->selectedVideos();
+        // 2) remove from disk and DB
+        for (auto const& v : selected) {
+            if (!v.path.empty()) {
+                try {
+                    std::filesystem::path filePath(v.path);
+                    if (std::filesystem::exists(filePath)) {
+                        std::filesystem::remove(filePath);
+                    }
+                } catch (std::exception const& e) {
+                    qWarning() << "Failed to remove file:"
+                               << QString::fromStdString(v.path)
+                               << "Error:" << e.what();
+                }
+            }
+            if (v.id > 0) {
+                m_db.deleteVideo(v.id);
+            }
+        }
+        // 3) remove from model
+        std::vector<int> videoIds;
+        videoIds.reserve(selected.size());
+        for (auto const& vid : selected) {
+            videoIds.push_back(vid.id);
+        }
+        m_model->removeVideosFromModel(videoIds);
+        break;
+    }
+    default:
+        qWarning() << "Unhandled DeleteOptions:" << (int)option;
+        break;
+    }
 }
 
 void VideoController::setModel(VideoModel* model)

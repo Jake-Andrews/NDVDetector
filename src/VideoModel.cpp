@@ -333,7 +333,7 @@ void VideoModel::markAllExceptSmallestInRange(int startRow, int endRow)
     }
 }
 
-void VideoModel::deleteSelectedVideos()
+void VideoModel::deleteSelectedVideosFromList()
 {
     beginResetModel();
     // remove any row that has selected = true, as long as it's a video
@@ -452,4 +452,31 @@ std::vector<std::vector<VideoInfo>> VideoModel::toGroups() const
 void VideoModel::fromGroups(std::vector<std::vector<VideoInfo>> const& groups)
 {
     setGroupedVideos(groups);
+}
+
+std::vector<VideoInfo> VideoModel::selectedVideos() const
+{
+    std::vector<VideoInfo> vids;
+    for (auto const& row : m_rows) {
+        if (row.type == RowType::Video && row.selected) {
+            vids.push_back(row.video.value());
+        }
+    }
+
+    return vids;
+}
+
+void VideoModel::removeVideosFromModel(std::vector<int> const& videoIds)
+{
+    beginResetModel();
+    m_rows.erase(
+        std::remove_if(m_rows.begin(), m_rows.end(), [&](RowEntry const& re) {
+            if (re.type != RowType::Video)
+                return false;
+            auto const& vid = re.video.value();
+            // Erase it if it matches any ID in videoIds
+            return (std::find(videoIds.begin(), videoIds.end(), vid.id) != videoIds.end());
+        }),
+        m_rows.end());
+    endResetModel();
 }

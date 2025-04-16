@@ -48,7 +48,8 @@ public:
     void selectAllExceptLargest();
     void selectAllExceptSmallest();
 
-    void deleteSelectedVideos();  
+    void deleteSelectedVideosFromList();  
+    void removeVideosFromModel(std::vector<int> const& videoIds);
 
     void sortVideosWithinGroupsBySize(bool ascending);
     void sortVideosWithinGroupsByCreatedAt(bool ascending);
@@ -58,6 +59,8 @@ public:
 
     // Data access
     const RowEntry& rowEntry(int row) const;
+    std::vector<VideoInfo> selectedVideos() const;
+
 
 private:
     std::vector<RowEntry> m_rows;

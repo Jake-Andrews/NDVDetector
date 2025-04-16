@@ -187,6 +187,25 @@ public:
         return results;
     }
 
+    void deleteVideo(int videoId)
+    {
+        static const char* sql = "DELETE FROM video WHERE id = ?;";
+        sqlite3_stmt* stmt = nullptr;
+
+        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            std::cerr << "[DB] Failed to prepare deleteVideo: " << sqlite3_errmsg(m_db) << "\n";
+            return;
+        }
+
+        sqlite3_bind_int(stmt, 1, videoId);
+
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            std::cerr << "[DB] Failed to delete video: " << sqlite3_errmsg(m_db) << "\n";
+        }
+
+        sqlite3_finalize(stmt);
+    }
+
 private:
     sqlite3* m_db = nullptr;
 
