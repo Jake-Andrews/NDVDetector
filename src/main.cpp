@@ -3,6 +3,7 @@
 #include "VideoController.h"
 
 #include <QApplication>
+#include <QMessageBox>
 
 int main(int argc, char* argv[])
 {
@@ -27,8 +28,8 @@ int main(int argc, char* argv[])
         &MainWindow::onDuplicateGroupsUpdated);
 
     QObject::connect(&w, &MainWindow::searchTriggered,
-        [&](QString rootPath) {
-            controller.startSearchAndDetection(rootPath);
+        [&] {
+            controller.startSearchAndDetection();
         });
 
     QObject::connect(&w, &MainWindow::selectOptionChosen,
@@ -51,6 +52,23 @@ int main(int argc, char* argv[])
     QObject::connect(&w, &MainWindow::deleteOptionChosen,
         [&](MainWindow::DeleteOptions option) {
             controller.handleDeleteOption(option);
+        });
+
+    // Connect directory signals
+    QObject::connect(&w, &MainWindow::addDirectoryRequested,
+        &controller, &VideoController::onAddDirectoryRequested);
+
+    QObject::connect(&w, &MainWindow::removeSelectedDirectoriesRequested,
+        &controller, &VideoController::onRemoveSelectedDirectoriesRequested);
+
+    // Connect for updating the UI’s directory list
+    QObject::connect(&controller, &VideoController::directoryListUpdated,
+        &w, &MainWindow::onDirectoryListUpdated);
+
+    // Optionally connect for errors
+    QObject::connect(&controller, &VideoController::errorOccurred,
+        [&](QString msg) {
+            QMessageBox::critical(&w, "Error", msg);
         });
 
     w.show();

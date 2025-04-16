@@ -12,7 +12,80 @@
    <string>NDVDetector - Video Info</string>
   </property>
   <widget class="QWidget" name="centralwidget">
+   <!-- Main vertical layout of the central widget -->
    <layout class="QVBoxLayout" name="verticalLayout">
+    
+    <!-- Collapsible GroupBox for directories -->
+   <!-- Tab-style collapsible section -->
+<item>
+  <layout class="QVBoxLayout" name="directorySectionLayout">
+    <!-- The "tab" style button -->
+    <item>
+      <widget class="QToolButton" name="toggleDirectoryButton">
+        <property name="text">
+          <string>▼ Search Directories</string>
+        </property>
+        <property name="checkable">
+          <bool>true</bool>
+        </property>
+        <property name="checked">
+          <bool>true</bool>
+        </property>
+        <property name="toolButtonStyle">
+          <enum>Qt::ToolButtonTextBesideIcon</enum>
+        </property>
+      </widget>
+    </item>
+    
+    <!-- The content section to expand/retract -->
+    <item>
+      <widget class="QFrame" name="directoryPanel">
+        <property name="frameShape">
+          <enum>QFrame::StyledPanel</enum>
+        </property>
+        <layout class="QVBoxLayout" name="directoryPanelLayout">
+          <item>
+            <widget class="QListWidget" name="directoryListWidget"/>
+          </item>
+          <item>
+            <layout class="QHBoxLayout" name="horizontalLayoutDirActions">
+              <item>
+                <widget class="QLineEdit" name="directoryLineEdit">
+                  <property name="placeholderText">
+                    <string>Enter directory path manually...</string>
+                  </property>
+                </widget>
+              </item>
+              <item>
+                <widget class="QToolButton" name="pickDirectoryButton">
+                  <property name="text">
+                    <string>...</string>
+                  </property>
+                </widget>
+              </item>
+              <item>
+                <widget class="QPushButton" name="addDirectoryButton">
+                  <property name="text">
+                    <string>Add</string>
+                  </property>
+                </widget>
+              </item>
+              <item>
+                <widget class="QPushButton" name="removeDirectoryButton">
+                  <property name="text">
+                    <string>Remove Selected</string>
+                  </property>
+                </widget>
+              </item>
+            </layout>
+          </item>
+        </layout>
+      </widget>
+    </item>
+  </layout>
+</item>
+ 
+    <!-- QTableView for displaying videos -->
     <item>
      <widget class="QTableView" name="tableView">
       <property name="sortingEnabled">
@@ -20,6 +93,8 @@
       </property>
      </widget>
     </item>
+    
+    <!-- Bottom row of buttons: Search, Select, Sort, Sort Groups, Delete -->
     <item>
      <layout class="QHBoxLayout" name="bottomButtonsLayout">
       <item>

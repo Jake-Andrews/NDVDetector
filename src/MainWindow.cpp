@@ -6,6 +6,7 @@
 #include <QAction>
 #include <QDebug>
 #include <QDesktopServices>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QHeaderView>
 #include <QKeyEvent>
@@ -20,6 +21,8 @@ MainWindow::MainWindow(QWidget* parent)
     , m_model(std::make_unique<VideoModel>(this))
 {
     ui->setupUi(this);
+
+    ui->directoryPanel->setVisible(true);
 
     // Set up QTableView
     auto* view = ui->tableView;
@@ -37,6 +40,14 @@ MainWindow::MainWindow(QWidget* parent)
     view->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     view->setIconSize(QSize(128, 128));
     view->verticalHeader()->setDefaultSectionSize(80);
+
+    // Connect the add/remove directory UI
+    connect(ui->addDirectoryButton, &QPushButton::clicked,
+        this, &MainWindow::onAddDirectoryButtonClicked);
+    connect(ui->pickDirectoryButton, &QToolButton::clicked,
+        this, &MainWindow::onPickDirectoryButtonClicked);
+    connect(ui->removeDirectoryButton, &QPushButton::clicked,
+        this, &MainWindow::onRemoveDirectoryButtonClicked);
 
     // Connect the five bottom buttons to local slots
     connect(ui->searchButton, &QPushButton::clicked, this, &MainWindow::onSearchClicked);
@@ -56,6 +67,12 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(ui->tableView, &QTableView::activated,
         this, &MainWindow::onRowActivated);
+
+    connect(ui->toggleDirectoryButton, &QToolButton::clicked, this, [=, this](bool checked) {
+        ui->directoryPanel->setVisible(checked);
+        ui->toggleDirectoryButton->setText(checked ? QString("▼ Search Directories")
+                                                   : QString("▲ Search Directories"));
+    });
 }
 
 MainWindow::~MainWindow()
@@ -78,8 +95,7 @@ void MainWindow::onDuplicateGroupsUpdated(std::vector<std::vector<VideoInfo>> co
 
 void MainWindow::onSearchClicked()
 {
-    auto rootPath = QString("./");
-    emit searchTriggered(rootPath);
+    emit searchTriggered();
 }
 
 void MainWindow::onSelectClicked()
@@ -150,6 +166,44 @@ void MainWindow::onDeleteClicked()
         emit deleteOptionChosen(DeleteOptions::ListDB);
     } else if (chosen == delFromDisk) {
         emit deleteOptionChosen(DeleteOptions::Disk);
+    }
+}
+
+void MainWindow::onAddDirectoryButtonClicked()
+{
+    QString typedPath = ui->directoryLineEdit->text().trimmed();
+    if (!typedPath.isEmpty()) {
+        emit addDirectoryRequested(typedPath);
+    }
+}
+
+void MainWindow::onPickDirectoryButtonClicked()
+{
+    QString dir = QFileDialog::getExistingDirectory(this, "Choose Directory");
+    if (!dir.isEmpty()) {
+        ui->directoryLineEdit->setText(dir);
+        emit addDirectoryRequested(dir);
+    }
+}
+
+void MainWindow::onRemoveDirectoryButtonClicked()
+{
+    auto selectedItems = ui->directoryListWidget->selectedItems();
+    if (selectedItems.isEmpty())
+        return;
+
+    QStringList dirsToRemove;
+    for (auto* item : selectedItems) {
+        dirsToRemove << item->text();
+    }
+    emit removeSelectedDirectoriesRequested(dirsToRemove);
+}
+
+void MainWindow::onDirectoryListUpdated(QStringList const& directories)
+{
+    ui->directoryListWidget->clear();
+    for (auto const& dir : directories) {
+        ui->directoryListWidget->addItem(dir);
     }
 }
 

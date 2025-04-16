@@ -8,23 +8,21 @@
 
 class SearchWorker : public QObject {
     Q_OBJECT
+
 public:
-    explicit SearchWorker(DatabaseManager& db,
-        QString rootPath,
-        QObject* parent = nullptr);
+    explicit SearchWorker(DatabaseManager& db, QStringList directories, QObject* parent = nullptr);
+    void process();
 
 signals:
     void filesFound(int count);
     void hashingProgress(int done, int total);
-    void finished(std::vector<std::vector<VideoInfo>> duplicates);
     void error(QString message);
-
-public slots:
-    void process();
+    void finished(std::vector<std::vector<VideoInfo>> duplicates);
 
 private:
     DatabaseManager& m_db;
-    QString m_rootPath;
+    QStringList m_directories;
 
     void doExtractionAndDetection(std::vector<VideoInfo>& videos);
 };
+

@@ -13,6 +13,7 @@
 #include "DatabaseManager.h"
 
 class SearchProgressDialog; 
+class VideoModel;
 
 class VideoController : public QObject
 {
@@ -21,17 +22,27 @@ class VideoController : public QObject
 public:
     explicit VideoController(DatabaseManager& db, QObject* parent = nullptr);
 
-    void startSearchAndDetection(QString rootPath = "./");
+    void setModel(VideoModel* model);
+
+public slots: 
+    void startSearchAndDetection();
+
+    void onAddDirectoryRequested(const QString& path);
+    void onRemoveSelectedDirectoriesRequested(const QStringList& dirs);
 
     void handleSelectOption(MainWindow::SelectOptions option);
     void handleSortOption(MainWindow::SortOptions option, bool ascending);
     void handleSortGroupsOption(MainWindow::SortOptions option, bool ascending);
     void handleDeleteOption(MainWindow::DeleteOptions option);
 
-    void setModel(VideoModel* model);
 
 signals:
     void duplicateGroupsUpdated(std::vector<std::vector<VideoInfo>> const& groups);
+
+    void directoryListUpdated(const QStringList& directories);
+
+    void errorOccurred(const QString& message);
+
     void updateProgress(QString status, int current, int total);
     void searchCompleted();
 
@@ -40,14 +51,14 @@ private:
     VideoModel* m_model = nullptr;
     std::vector<std::vector<VideoInfo>> m_currentGroups;
 
+    QStringList m_directories;
+
     QPointer<SearchProgressDialog> m_progressDialog;
     QFutureWatcher<void> m_searchWatcher;
 
     std::atomic<int> m_totalVideos { 0 };
     std::atomic<int> m_processedVideos { 0 };
     std::atomic<int> m_filesFound { 0 };
-
-    void runSearchAndDetection(QString rootPath);
 
     void deleteFromListOnly();
     void deleteFromListAndDb();

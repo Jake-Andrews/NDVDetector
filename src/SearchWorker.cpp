@@ -7,22 +7,33 @@
 #include <filesystem>
 #include <unordered_set>
 
-SearchWorker::SearchWorker(DatabaseManager& db, QString rootPath, QObject* parent)
+SearchWorker::SearchWorker(DatabaseManager& db, QStringList directories, QObject* parent)
     : QObject(parent)
     , m_db(db)
-    , m_rootPath(rootPath)
+    , m_directories(std::move(directories))
 {
 }
 
 void SearchWorker::process()
 {
     try {
-        // 1) Find possible videos
-        std::filesystem::path root(m_rootPath.toStdString());
-        auto videos = getVideosFromPath(root, { ".mp4", ".webm" });
-        emit filesFound((int)videos.size());
+        std::vector<VideoInfo> allVideos;
 
-        // 2) Filter out previously processed videos
+        for (QString const& dir : m_directories) {
+            std::filesystem::path path(dir.toStdString());
+
+            if (!std::filesystem::exists(path) || !std::filesystem::is_directory(path)) {
+                emit error(QString("Directory not valid or accessible: %1").arg(dir));
+                continue;
+            }
+
+            auto vids = getVideosFromPath(path, { ".mp4", ".webm" });
+            allVideos.insert(allVideos.end(), vids.begin(), vids.end());
+        }
+
+        emit filesFound((int)allVideos.size());
+
+        // Remove already processed
         auto dbVideos = m_db.getAllVideos();
         std::unordered_set<std::string> knownPaths;
         knownPaths.reserve(dbVideos.size());
@@ -30,25 +41,19 @@ void SearchWorker::process()
             knownPaths.insert(dv.path);
         }
 
-        std::erase_if(videos, [&](VideoInfo const& v) {
-            return knownPaths.count(v.path) > 0;
+        std::erase_if(allVideos, [&](VideoInfo const& v) {
+            return knownPaths.contains(v.path);
         });
 
-        // 3) Extract metadata, store in DB, and run pHash
-        doExtractionAndDetection(videos);
+        doExtractionAndDetection(allVideos);
 
-        // 4) find duplicates from full db
-        auto allVideos = m_db.getAllVideos();
-        auto hashGroups = m_db.getAllHashGroups();
-
-        auto duplicates = findDuplicates(std::move(allVideos), hashGroups, 4, 5);
-
-        // 5) Emit finished signal
-        emit finished(duplicates);
+        auto all = m_db.getAllVideos();
+        auto hashes = m_db.getAllHashGroups();
+        emit finished(findDuplicates(std::move(all), hashes, 4, 5));
     } catch (std::exception const& e) {
         emit error(QString::fromStdString(e.what()));
     } catch (...) {
-        emit error("Unknown error in search worker");
+        emit error("Unknown error occurred during search.");
     }
 }
 

@@ -19,8 +19,13 @@ VideoController::VideoController(DatabaseManager& db, QObject* parent)
 {
 }
 
-void VideoController::startSearchAndDetection(QString rootPath)
+void VideoController::startSearchAndDetection()
 {
+    if (m_directories.isEmpty()) {
+        emit errorOccurred("No directories specified. Please add at least one directory.");
+        return;
+    }
+
     // 1) Create progress dialog
     auto* progressDialog = new QProgressDialog(
         "Searching for videos...",
@@ -36,7 +41,7 @@ void VideoController::startSearchAndDetection(QString rootPath)
 
     // 2) Create worker and thread
     QThread* thread = new QThread(this); // parent is this, so it cleans up
-    SearchWorker* worker = new SearchWorker(m_db, rootPath);
+    SearchWorker* worker = new SearchWorker(m_db, m_directories);
     worker->moveToThread(thread);
 
     // 3) Connect signals/slots
@@ -93,65 +98,29 @@ void VideoController::startSearchAndDetection(QString rootPath)
     thread->start();
 }
 
-void VideoController::runSearchAndDetection(QString rootPath)
+void VideoController::onAddDirectoryRequested(QString const& path)
 {
-    std::filesystem::path root(rootPath.toStdString());
-    auto videos = getVideosFromPath(root, { ".mp4", ".webm" });
-    auto dbVideos = m_db.getAllVideos();
-
-    // remove already processed
-    {
-        std::unordered_set<std::string> knownPaths;
-        knownPaths.reserve(dbVideos.size());
-        for (auto const& dv : dbVideos) {
-            knownPaths.insert(dv.path);
-        }
-        std::erase_if(videos, [&](VideoInfo const& v) {
-            if (knownPaths.contains(v.path)) {
-                std::cout << "[Info] Skipping processed: " << v.path << "\n";
-                return true;
-            }
-            return false;
-        });
+    std::filesystem::path fsPath(path.toStdString());
+    if (!std::filesystem::exists(fsPath) || !std::filesystem::is_directory(fsPath)) {
+        // Directory invalid -> emit an error signal
+        emit errorOccurred(QString("Directory does not exist:\n%1").arg(path));
+        return;
     }
 
-    // Extract metadata + store in db
-    std::erase_if(videos, [&](VideoInfo& v) {
-        if (!extract_info(v)) {
-            std::cerr << "Failed to extract info for: " << v.path << "\n";
-            return true;
-        }
-
-        if (auto opt = extract_color_thumbnail(v.path)) {
-            v.thumbnail_path = opt->toStdString();
-        } else {
-            v.thumbnail_path = "./sneed.png";
-        }
-        m_db.insertVideo(v);
-        return false;
-    });
-
-    // screenshots + pHashes
-    for (auto const& v : videos) {
-        auto frames = decode_video_frames_as_cimg(v.path);
-        if (frames.empty())
-            continue;
-
-        auto hashes = generate_pHashes(frames);
-        if (hashes.empty())
-            continue;
-
-        m_db.insertAllHashes(v.id, hashes);
+    // It's valid, so add to our list if not already present
+    if (!m_directories.contains(path)) {
+        m_directories << path;
+        emit directoryListUpdated(m_directories);
     }
+}
 
-    // find duplicates from full db
-    auto allVideos = m_db.getAllVideos();
-    auto hashGroups = m_db.getAllHashGroups();
-
-    m_currentGroups = findDuplicates(std::move(allVideos), hashGroups, 4, 5);
-
-    // now broadcast them to the view
-    emit duplicateGroupsUpdated(m_currentGroups);
+// Called by UI to remove selected directories
+void VideoController::onRemoveSelectedDirectoriesRequested(QStringList const& dirs)
+{
+    for (auto const& d : dirs) {
+        m_directories.removeAll(d);
+    }
+    emit directoryListUpdated(m_directories);
 }
 
 void VideoController::handleSelectOption(MainWindow::SelectOptions option)

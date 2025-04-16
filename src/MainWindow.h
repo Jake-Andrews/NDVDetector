@@ -5,11 +5,12 @@
 #include <vector>
 #include "VideoInfo.h"
 
-class VideoModel;
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
 QT_END_NAMESPACE
+
+class VideoModel;
 
 class MainWindow : public QMainWindow
 {
@@ -46,13 +47,17 @@ public:
     Q_ENUM(SortOptions);
 
 signals:
-    void searchTriggered(QString rootPath);
+    void searchTriggered();
     void selectOptionChosen(MainWindow::SelectOptions option);
     void sortOptionChosen(MainWindow::SortOptions option);
     void sortGroupsOptionChosen(MainWindow::SortOptions option);
     void deleteOptionChosen(MainWindow::DeleteOptions option);
 
+    void addDirectoryRequested(const QString& dirPath);
+    void removeSelectedDirectoriesRequested(const QStringList& dirsToRemove);
+
 public slots:
+    void onDirectoryListUpdated(const QStringList& directories);
     void onDuplicateGroupsUpdated(std::vector<std::vector<VideoInfo>> const& groups);
 
 private slots:
@@ -62,6 +67,10 @@ private slots:
     void onSortGroupsClicked();
     void onDeleteClicked();
     void onRowActivated(const QModelIndex& index);
+
+    void onAddDirectoryButtonClicked();
+    void onPickDirectoryButtonClicked();
+    void onRemoveDirectoryButtonClicked();
 
 private:
     Ui::MainWindow *ui;
