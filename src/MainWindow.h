@@ -61,6 +61,7 @@ private slots:
     void onSortClicked();
     void onSortGroupsClicked();
     void onDeleteClicked();
+    void onRowActivated(const QModelIndex& index);
 
 private:
     Ui::MainWindow *ui;

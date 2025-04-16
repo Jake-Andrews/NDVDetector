@@ -5,10 +5,14 @@
 
 #include <QAction>
 #include <QDebug>
+#include <QDesktopServices>
+#include <QFileInfo>
 #include <QHeaderView>
+#include <QKeyEvent>
 #include <QMenu>
 #include <QPushButton>
 #include <QTableView>
+#include <QUrl>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -49,6 +53,9 @@ MainWindow::MainWindow(QWidget* parent)
                 }
             }
         });
+
+    connect(ui->tableView, &QTableView::activated,
+        this, &MainWindow::onRowActivated);
 }
 
 MainWindow::~MainWindow()
@@ -143,5 +150,23 @@ void MainWindow::onDeleteClicked()
         emit deleteOptionChosen(DeleteOptions::ListDB);
     } else if (chosen == delFromDisk) {
         emit deleteOptionChosen(DeleteOptions::Disk);
+    }
+}
+
+void MainWindow::onRowActivated(QModelIndex const& index)
+{
+    if (!index.isValid())
+        return;
+
+    auto const& entry = m_model->rowEntry(index.row());
+    if (entry.type != RowType::Video)
+        return;
+
+    QString const filePath = QString::fromStdString(entry.video->path);
+    QFileInfo info(filePath);
+    if (info.exists()) {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(filePath));
+    } else {
+        qWarning() << "Cannot open. File does not exist:" << filePath;
     }
 }
