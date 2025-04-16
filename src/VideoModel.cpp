@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <climits>
 #include <numeric>
+#include <qnamespace.h>
 
 VideoModel::VideoModel(QObject* parent)
     : QAbstractTableModel(parent)
@@ -163,12 +164,13 @@ Qt::ItemFlags VideoModel::flags(QModelIndex const& index) const
         return Qt::ItemIsEnabled;
     }
 
-    // For video rows, let's allow user check/uncheck col 0
+    Qt::ItemFlags flags = Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+
     if (index.column() == Col_Screenshot) {
-        return Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable;
+        flags |= Qt::ItemIsUserCheckable;
     }
-    // normal columns are selectable only
-    return Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+
+    return flags;
 }
 
 bool VideoModel::setData(QModelIndex const& index, QVariant const& value, int role)
@@ -180,17 +182,31 @@ bool VideoModel::setData(QModelIndex const& index, QVariant const& value, int ro
     if (row.type != RowType::Video)
         return false;
 
-    // only handle col 0, checkStateRole
     if (role == Qt::CheckStateRole && index.column() == Col_Screenshot) {
         bool checked = (value.toInt() == Qt::Checked);
         row.selected = checked;
 
-        // notify views
         emit dataChanged(index, index, { Qt::CheckStateRole });
         return true;
     }
 
     return false;
+}
+
+void VideoModel::selectRow(int row)
+{
+    if (row < 0 || row >= (int)m_rows.size())
+        return;
+
+    auto& entry = m_rows[row];
+    if (entry.type != RowType::Video)
+        return;
+
+    if (!entry.selected) {
+        entry.selected = true;
+        QModelIndex idx = createIndex(row, Col_Screenshot);
+        emit dataChanged(idx, idx, { Qt::CheckStateRole });
+    }
 }
 
 /*!

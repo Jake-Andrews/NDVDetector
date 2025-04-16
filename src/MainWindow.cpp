@@ -40,6 +40,15 @@ MainWindow::MainWindow(QWidget* parent)
     connect(ui->sortButton, &QPushButton::clicked, this, &MainWindow::onSortClicked);
     connect(ui->sortGroupsButton, &QPushButton::clicked, this, &MainWindow::onSortGroupsClicked);
     connect(ui->deleteButton, &QPushButton::clicked, this, &MainWindow::onDeleteClicked);
+
+    connect(ui->tableView->selectionModel(), &QItemSelectionModel::selectionChanged,
+        this, [&](QItemSelection const& selected, QItemSelection const&) {
+            for (QModelIndex const& index : selected.indexes()) {
+                if (index.column() == 0) { // Avoid duplicate row triggers
+                    m_model->selectRow(index.row());
+                }
+            }
+        });
 }
 
 MainWindow::~MainWindow()

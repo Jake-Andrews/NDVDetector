@@ -57,6 +57,8 @@ public:
     void sortGroupsBySize(bool ascending);
     void sortGroupsByCreatedAt(bool ascending);
 
+    void selectRow(int row);
+
     // Data access
     const RowEntry& rowEntry(int row) const;
     std::vector<VideoInfo> selectedVideos() const;
