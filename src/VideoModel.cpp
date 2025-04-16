@@ -16,12 +16,22 @@ VideoModel::VideoModel(QObject* parent)
 
 void VideoModel::setGroupedVideos(std::vector<std::vector<VideoInfo>> const& groups)
 {
+    // 1) Filter out any groups that have fewer than 2 videos.
+    std::vector<std::vector<VideoInfo>> filteredGroups;
+    filteredGroups.reserve(groups.size());
+    for (auto const& g : groups) {
+        if (g.size() >= 2) {
+            filteredGroups.push_back(g);
+        }
+    }
+
     beginResetModel();
     m_rows.clear();
     m_groupBoundaries.clear();
 
+    // 2) Proceed with normal insertion logic, but using filteredGroups now
     int groupIndex = 0;
-    for (auto const& grp : groups) {
+    for (auto const& grp : filteredGroups) {
         // Insert a 'Separator' row to label this group
         RowEntry sep;
         sep.type = RowType::Separator;
@@ -90,11 +100,12 @@ QVariant VideoModel::data(QModelIndex const& index, int role) const
         case Col_Path:
             return QString::fromStdString(vid.path);
         case Col_TechSpecs: {
-            auto sizeKb = vid.size / 1024;
-            auto br = vid.bit_rate / 1000;
-            return QString("Size: %1 KB\nBitrate: %2 kb/s\nResolution: %3x%4\nFramerate: %5\nDuration: %6s")
-                .arg(sizeKb)
-                .arg(br)
+            double sizeGB = static_cast<double>(vid.size) / (1024.0 * 1024.0 * 1024.0);
+            double bitrateMbps = static_cast<double>(vid.bit_rate) / 1'000'000.0;
+
+            return QString("Size: %1 GB\nBitrate: %2 Mbps\nResolution: %3x%4\nFramerate: %5\nDuration: %6s")
+                .arg(sizeGB, 0, 'f', 2)
+                .arg(bitrateMbps, 0, 'f', 2)
                 .arg(vid.width)
                 .arg(vid.height)
                 .arg(vid.avg_frame_rate, 0, 'f', 2)

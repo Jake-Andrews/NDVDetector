@@ -39,7 +39,7 @@ MainWindow::MainWindow(QWidget* parent)
     // Center screenshots in their column
     view->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     view->setIconSize(QSize(128, 128));
-    view->verticalHeader()->setDefaultSectionSize(80);
+    view->verticalHeader()->setDefaultSectionSize(120);
 
     // Connect the add/remove directory UI
     connect(ui->addDirectoryButton, &QPushButton::clicked,
