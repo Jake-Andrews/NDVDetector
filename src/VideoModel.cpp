@@ -35,7 +35,18 @@ void VideoModel::setGroupedVideos(std::vector<std::vector<VideoInfo>> const& gro
         // Insert a 'Separator' row to label this group
         RowEntry sep;
         sep.type = RowType::Separator;
-        sep.label = QString("== GROUP %1 (%2 videos) ==").arg(++groupIndex).arg(grp.size());
+
+        int64_t totalSize = 0;
+        for (auto const& v : grp) {
+            totalSize += v.size;
+        }
+        double sizeGB = static_cast<double>(totalSize) / (1024.0 * 1024.0 * 1024.0);
+
+        sep.label = QString("Group %1 (%2 Duplicates - Size: %3 GB)")
+                        .arg(++groupIndex)
+                        .arg(grp.size())
+                        .arg(sizeGB, 0, 'f', 2);
+
         m_groupBoundaries.push_back(static_cast<int>(m_rows.size()));
         m_rows.push_back(std::move(sep));
 
