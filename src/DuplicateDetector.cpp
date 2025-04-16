@@ -83,25 +83,6 @@ findDuplicates(std::vector<VideoInfo> videos,
             }
         }
 
-        // Debug printing if desired:
-        /*
-        if (!likelyMatches.empty()) {
-            auto it = videoPaths.find(group.fk_hash_video);
-            if (it != videoPaths.end()) {
-                std::cout << "Video: " << it->second << " matches with:\n";
-            } else {
-                std::cout << "Unknown video id " << group.fk_hash_video << " matches with:\n";
-            }
-            for (auto matchId : likelyMatches) {
-                if (auto mp = videoPaths.find(matchId); mp != videoPaths.end()) {
-                    std::cout << "   -> " << mp->second << "\n";
-                } else {
-                    std::cout << "   -> Unknown video id " << matchId << "\n";
-                }
-            }
-        }
-        */
-
         // store edges in duplicates vector for union-find
         // group.fk_hash_video is the "primary" video, each matchId is a duplicate
         int mainIndex = idToIndex[group.fk_hash_video];
@@ -140,4 +121,3 @@ findDuplicates(std::vector<VideoInfo> videos,
 
     return duplicateGroups;
 }
-
