@@ -26,9 +26,10 @@ int main(int argc, char* argv[])
         &w,
         &MainWindow::onDuplicateGroupsUpdated);
 
-    QObject::connect(&w, &MainWindow::searchTriggered, [&] {
-        controller.runSearchAndDetection();
-    });
+    QObject::connect(&w, &MainWindow::searchTriggered,
+        [&](QString rootPath) {
+            controller.startSearchAndDetection(rootPath);
+        });
 
     QObject::connect(&w, &MainWindow::selectOptionChosen,
         [&](MainWindow::SelectOptions option) {
@@ -55,4 +56,3 @@ int main(int argc, char* argv[])
     w.show();
     return app.exec();
 }
-

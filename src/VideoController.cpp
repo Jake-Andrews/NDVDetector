@@ -3,9 +3,15 @@
 #include "DuplicateDetector.h"
 #include "FFProbeExtractor.h"
 #include "FileSystemSearch.h"
+#include "SearchWorker.h"
 #include "VideoModel.h"
-#include <QDebug>
+
 #include <iostream>
+
+#include <QDebug>
+#include <QMessageBox>
+#include <QProgressDialog>
+#include <QThread>
 
 VideoController::VideoController(DatabaseManager& db, QObject* parent)
     : QObject(parent)
@@ -13,9 +19,83 @@ VideoController::VideoController(DatabaseManager& db, QObject* parent)
 {
 }
 
-void VideoController::runSearchAndDetection()
+void VideoController::startSearchAndDetection(QString rootPath)
 {
-    std::filesystem::path root("./");
+    // 1) Create progress dialog
+    auto* progressDialog = new QProgressDialog(
+        "Searching for videos...",
+        "Cancel",
+        0,   // min
+        100, // max (we’ll adjust dynamically)
+        nullptr);
+    progressDialog->setWindowTitle("Searching");
+    progressDialog->setWindowModality(Qt::ApplicationModal);
+    progressDialog->setAutoClose(false);
+    progressDialog->setAutoReset(false);
+    progressDialog->show();
+
+    // 2) Create worker and thread
+    QThread* thread = new QThread(this); // parent is this, so it cleans up
+    SearchWorker* worker = new SearchWorker(m_db, rootPath);
+    worker->moveToThread(thread);
+
+    // 3) Connect signals/slots
+    connect(thread, &QThread::started, worker, &SearchWorker::process);
+
+    // Update UI with # files found
+    connect(worker, &SearchWorker::filesFound, progressDialog, [progressDialog](int count) {
+        progressDialog->setLabelText(QString("Found %1 videos.\nScanning metadata...").arg(count));
+        progressDialog->setRange(0, count); // update the max to "count"
+    });
+
+    // Update hashing progress
+    connect(worker, &SearchWorker::hashingProgress, progressDialog,
+        [progressDialog](int done, int total) {
+            // setValue triggers the progress bar position
+            progressDialog->setValue(done);
+            progressDialog->setLabelText(
+                QString("Hashing videos... %1/%2 done").arg(done).arg(total));
+        });
+
+    // If an error occurs
+    connect(worker, &SearchWorker::error, progressDialog,
+        [progressDialog](QString msg) {
+            QMessageBox::critical(progressDialog, "Error", msg);
+        });
+
+    // On finished
+    connect(worker, &SearchWorker::finished, this,
+        [=, this](std::vector<std::vector<VideoInfo>> duplicates) {
+            // 1) close the dialog
+            progressDialog->close();
+            progressDialog->deleteLater();
+
+            // 2) send them to the view
+            emit duplicateGroupsUpdated(std::move(duplicates));
+
+            // 3) cleanup
+            thread->quit();
+        });
+
+    // Once thread is finished, delete worker + thread
+    connect(thread, &QThread::finished, worker, &SearchWorker::deleteLater);
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+
+    // 4) If user clicks cancel button
+    connect(progressDialog, &QProgressDialog::canceled, this, [=]() {
+        // you might want to requestStop for the worker or forcibly kill the thread.
+        // For now, let's just do:
+        thread->requestInterruption();
+        progressDialog->setLabelText("Canceling...");
+    });
+
+    // 5) Start the thread
+    thread->start();
+}
+
+void VideoController::runSearchAndDetection(QString rootPath)
+{
+    std::filesystem::path root(rootPath.toStdString());
     auto videos = getVideosFromPath(root, { ".mp4", ".webm" });
     auto dbVideos = m_db.getAllVideos();
 

@@ -62,7 +62,8 @@ void MainWindow::onDuplicateGroupsUpdated(std::vector<std::vector<VideoInfo>> co
 
 void MainWindow::onSearchClicked()
 {
-    emit searchTriggered();
+    auto rootPath = QString("./");
+    emit searchTriggered(rootPath);
 }
 
 void MainWindow::onSelectClicked()

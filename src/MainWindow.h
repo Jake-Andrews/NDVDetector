@@ -46,7 +46,7 @@ public:
     Q_ENUM(SortOptions);
 
 signals:
-    void searchTriggered();
+    void searchTriggered(QString rootPath);
     void selectOptionChosen(MainWindow::SelectOptions option);
     void sortOptionChosen(MainWindow::SortOptions option);
     void sortGroupsOptionChosen(MainWindow::SortOptions option);
