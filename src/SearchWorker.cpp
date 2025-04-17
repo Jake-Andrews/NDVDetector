@@ -29,7 +29,7 @@ void SearchWorker::process()
                 continue;
             }
 
-            auto vids = getVideosFromPath(path, { ".mp4", ".webm" });
+            auto vids = getVideosFromPath(path, { ".mp4", ".webm", ".mkv" });
             allVideos.insert(allVideos.end(), vids.begin(), vids.end());
         }
 

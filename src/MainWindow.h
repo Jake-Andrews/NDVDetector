@@ -75,6 +75,7 @@ private slots:
 private:
     Ui::MainWindow *ui;
     std::unique_ptr<VideoModel> m_model;
+    bool eventFilter(QObject* watched, QEvent* event) override; 
 };
 
 

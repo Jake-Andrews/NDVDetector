@@ -37,6 +37,8 @@ public:
     // Show grouped videos with a separator row for each group
     void setGroupedVideos(std::vector<std::vector<VideoInfo>> const& groups);
 
+    QSize span(const QModelIndex& index) const override;
+
     // QAbstractTableModel overrides
     int rowCount(const QModelIndex &parent = QModelIndex()) const override;
     int columnCount(const QModelIndex &parent = QModelIndex()) const override;

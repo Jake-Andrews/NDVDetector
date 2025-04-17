@@ -25,10 +25,21 @@ MainWindow::MainWindow(QWidget* parent)
     ui->directoryPanel->setVisible(true);
 
     // Set up QTableView
+    // Set up QTableView
     auto* view = ui->tableView;
     view->setModel(m_model.get());
 
+    QHeaderView* hHeader = view->horizontalHeader();
+    if (hHeader) {
+        hHeader->setSectionResizeMode(QHeaderView::Stretch);
+        hHeader->setStretchLastSection(true);
+    }
+
+    // Set the delegate once
     view->setItemDelegate(new GroupRowDelegate(this));
+
+    // Install the event filter
+    ui->tableView->viewport()->installEventFilter(this);
 
     // Remove grid lines so group separator rows appear continuous
     view->setShowGrid(false);
@@ -36,10 +47,28 @@ MainWindow::MainWindow(QWidget* parent)
     // Entire row highlight
     view->setSelectionBehavior(QAbstractItemView::SelectRows);
 
+    // Add this line to prevent clicking on separator rows from selecting them
+    view->setSelectionMode(QAbstractItemView::SingleSelection);
+
+    // Disable focus rectangles which can appear on cells
+    view->setFocusPolicy(Qt::StrongFocus);
+
     // Center screenshots in their column
     view->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     view->setIconSize(QSize(128, 128));
     view->verticalHeader()->setDefaultSectionSize(120);
+
+    // Add handler for clicked signal to prevent selection of separator rows
+    connect(view, &QTableView::clicked, this, [this, view](QModelIndex const& index) {
+        if (!index.isValid())
+            return;
+
+        auto const& entry = m_model->rowEntry(index.row());
+        if (entry.type == RowType::Separator) {
+            // Clear the selection when clicking on separator rows
+            view->selectionModel()->clear();
+        }
+    });
 
     // Connect the add/remove directory UI
     connect(ui->addDirectoryButton, &QPushButton::clicked,
@@ -214,7 +243,7 @@ void MainWindow::onRowActivated(QModelIndex const& index)
 
     auto const& entry = m_model->rowEntry(index.row());
     if (entry.type != RowType::Video)
-        return;
+        return; // Skip activation for separator rows
 
     QString const filePath = QString::fromStdString(entry.video->path);
     QFileInfo info(filePath);
@@ -223,4 +252,25 @@ void MainWindow::onRowActivated(QModelIndex const& index)
     } else {
         qWarning() << "Cannot open. File does not exist:" << filePath;
     }
+}
+bool MainWindow::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == ui->tableView->viewport()) {
+        if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonRelease || event->type() == QEvent::MouseButtonDblClick) {
+
+            QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
+            QPoint pos = mouseEvent->pos();
+            QModelIndex index = ui->tableView->indexAt(pos);
+
+            if (index.isValid()) {
+                auto const& entry = m_model->rowEntry(index.row());
+                if (entry.type == RowType::Separator) {
+                    // Prevent the event from being processed for separator rows
+                    return true;
+                }
+            }
+        }
+    }
+
+    return QMainWindow::eventFilter(watched, event);
 }

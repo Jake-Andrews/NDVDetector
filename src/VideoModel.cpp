@@ -183,6 +183,7 @@ Qt::ItemFlags VideoModel::flags(QModelIndex const& index) const
 
     auto const& row = m_rows[index.row()];
     if (row.type == RowType::Separator) {
+        // Make separator rows enabled but not selectable or activatable
         return Qt::ItemIsEnabled;
     }
 
@@ -517,4 +518,20 @@ void VideoModel::removeVideosFromModel(std::vector<int> const& videoIds)
         }),
         m_rows.end());
     endResetModel();
+}
+QSize VideoModel::span(QModelIndex const& index) const
+{
+    if (!index.isValid())
+        return {};
+
+    auto const& row = m_rows[index.row()];
+
+    // Make the *first* cell of a separator row occupy the whole row.
+    if (row.type == RowType::Separator) {
+        if (index.column() == 0)
+            return QSize(Col_Count, 1); // span all columns, one row
+        else
+            return QSize(1, 1); // inside the span → normal size
+    }
+    return QSize(1, 1); // normal cells
 }
