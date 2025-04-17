@@ -12,173 +12,172 @@
    <string>NDVDetector - Video Info</string>
   </property>
   <widget class="QWidget" name="centralwidget">
-   <!-- Main vertical layout of the central widget -->
    <layout class="QVBoxLayout" name="verticalLayout">
-    
-    <!-- Collapsible GroupBox for directories -->
-   <!-- Tab-style collapsible section -->
-<item>
-  <layout class="QVBoxLayout" name="directorySectionLayout">
-    <!-- The "tab" style button -->
+    <!-- Tab widget to hold Main view and Settings -->
     <item>
-      <widget class="QToolButton" name="toggleDirectoryButton">
-        <property name="text">
-          <string>▼ Search Directories</string>
-        </property>
-        <property name="checkable">
-          <bool>true</bool>
-        </property>
-        <property name="checked">
-          <bool>true</bool>
-        </property>
-        <property name="toolButtonStyle">
-          <enum>Qt::ToolButtonTextBesideIcon</enum>
-        </property>
-      </widget>
-    </item>
-    
-    <!-- The content section to expand/retract -->
-    <item>
-      <widget class="QFrame" name="directoryPanel">
-        <property name="frameShape">
-          <enum>QFrame::StyledPanel</enum>
-        </property>
-        <layout class="QVBoxLayout" name="directoryPanelLayout">
+     <widget class="QTabWidget" name="tabWidget">
+      
+      <!-- Videos Tab -->
+      <widget class="QWidget" name="videosTab">
+       <layout class="QVBoxLayout" name="videosLayout">
+        <!-- Collapsible Search Directories -->
+        <item>
+         <layout class="QVBoxLayout" name="directorySectionLayout">
           <item>
-            <widget class="QListWidget" name="directoryListWidget"/>
+           <widget class="QToolButton" name="toggleDirectoryButton">
+            <property name="text"><string>▼ Search Directories</string></property>
+            <property name="checkable"><bool>true</bool></property>
+            <property name="checked"><bool>true</bool></property>
+            <property name="toolButtonStyle">
+             <enum>Qt::ToolButtonTextBesideIcon</enum>
+            </property>
+           </widget>
           </item>
           <item>
-            <layout class="QHBoxLayout" name="horizontalLayoutDirActions">
-              <item>
+           <widget class="QFrame" name="directoryPanel">
+            <property name="frameShape">
+             <enum>QFrame::StyledPanel</enum>
+            </property>
+            <layout class="QVBoxLayout" name="directoryPanelLayout">
+             <item>
+              <widget class="QListWidget" name="directoryListWidget"/>
+             </item>
+             <item>
+              <layout class="QHBoxLayout" name="horizontalLayoutDirActions">
+               <item>
                 <widget class="QLineEdit" name="directoryLineEdit">
-                  <property name="placeholderText">
-                    <string>Enter directory path manually...</string>
-                  </property>
+                 <property name="placeholderText">
+                  <string>Enter directory path manually...</string>
+                 </property>
                 </widget>
-              </item>
-              <item>
+               </item>
+               <item>
                 <widget class="QToolButton" name="pickDirectoryButton">
-                  <property name="text">
-                    <string>...</string>
-                  </property>
+                 <property name="text"><string>...</string></property>
                 </widget>
-              </item>
-              <item>
+               </item>
+               <item>
                 <widget class="QPushButton" name="addDirectoryButton">
-                  <property name="text">
-                    <string>Add</string>
-                  </property>
+                 <property name="text"><string>Add</string></property>
                 </widget>
-              </item>
-              <item>
+               </item>
+               <item>
                 <widget class="QPushButton" name="removeDirectoryButton">
-                  <property name="text">
-                    <string>Remove Selected</string>
-                  </property>
+                 <property name="text"><string>Remove Selected</string></property>
                 </widget>
-              </item>
+               </item>
+              </layout>
+             </item>
             </layout>
+           </widget>
           </item>
-        </layout>
+         </layout>
+        </item>
+
+        <!-- Table view -->
+        <item>
+         <widget class="QTableView" name="tableView">
+          <property name="sortingEnabled"><bool>true</bool></property>
+         </widget>
+        </item>
+
+        <!-- Bottom buttons -->
+        <item>
+         <layout class="QHBoxLayout" name="bottomButtonsLayout">
+          <item>
+           <widget class="QPushButton" name="searchButton">
+            <property name="text"><string>Search</string></property>
+            <property name="minimumSize">
+             <size><width>100</width><height>40</height></size>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="selectButton">
+            <property name="text"><string>Select</string></property>
+            <property name="minimumSize">
+             <size><width>100</width><height>40</height></size>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="sortButton">
+            <property name="text"><string>Sort</string></property>
+            <property name="minimumSize">
+             <size><width>100</width><height>40</height></size>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="sortGroupsButton">
+            <property name="text"><string>Sort Groups</string></property>
+            <property name="minimumSize">
+             <size><width>100</width><height>40</height></size>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="deleteButton">
+            <property name="text"><string>Delete</string></property>
+            <property name="minimumSize">
+             <size><width>100</width><height>40</height></size>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <spacer name="horizontalSpacer">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeType">
+             <enum>QSizePolicy::Expanding</enum>
+            </property>
+           </spacer>
+          </item>
+         </layout>
+        </item>
+       </layout>
       </widget>
-    </item>
-  </layout>
-</item>
- 
-    <!-- QTableView for displaying videos -->
-    <item>
-     <widget class="QTableView" name="tableView">
-      <property name="sortingEnabled">
-       <bool>true</bool>
-      </property>
+      <attribute name="tabText">
+       <string>Videos</string>
+      </attribute>
+
+      <!-- Settings Tab -->
+      <widget class="QWidget" name="settingsTab">
+       <layout class="QVBoxLayout" name="settingsLayout">
+        <item>
+         <widget class="QGroupBox" name="displaySettingsGroup">
+          <property name="title">
+           <string>Display Options</string>
+          </property>
+          <layout class="QVBoxLayout" name="displaySettingsLayout">
+           <item>
+            <widget class="QCheckBox" name="singleLinkCheckBox">
+             <property name="text">
+              <string>Only display one link per file (inode/device)</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <spacer name="verticalSpacer">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+          </property>
+          <property name="sizeType">
+           <enum>QSizePolicy::Expanding</enum>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </widget>
+      <attribute name="tabText">
+       <string>Settings</string>
+      </attribute>
+
      </widget>
-    </item>
-    
-    <!-- Bottom row of buttons: Search, Select, Sort, Sort Groups, Delete -->
-    <item>
-     <layout class="QHBoxLayout" name="bottomButtonsLayout">
-      <item>
-       <widget class="QPushButton" name="searchButton">
-        <property name="text">
-         <string>Search</string>
-        </property>
-        <property name="minimumSize">
-         <size>
-          <width>100</width>
-          <height>40</height>
-         </size>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QPushButton" name="selectButton">
-        <property name="text">
-         <string>Select</string>
-        </property>
-        <property name="minimumSize">
-         <size>
-          <width>100</width>
-          <height>40</height>
-         </size>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QPushButton" name="sortButton">
-        <property name="text">
-         <string>Sort</string>
-        </property>
-        <property name="minimumSize">
-         <size>
-          <width>100</width>
-          <height>40</height>
-         </size>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QPushButton" name="sortGroupsButton">
-        <property name="text">
-         <string>Sort Groups</string>
-        </property>
-        <property name="minimumSize">
-         <size>
-          <width>100</width>
-          <height>40</height>
-         </size>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QPushButton" name="deleteButton">
-        <property name="text">
-         <string>Delete</string>
-        </property>
-        <property name="minimumSize">
-         <size>
-          <width>100</width>
-          <height>40</height>
-         </size>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <spacer name="horizontalSpacer">
-        <property name="orientation">
-         <enum>Qt::Horizontal</enum>
-        </property>
-        <property name="sizeType">
-         <enum>QSizePolicy::Expanding</enum>
-        </property>
-        <property name="sizeHint">
-         <size>
-          <width>40</width>
-          <height>20</height>
-         </size>
-        </property>
-       </spacer>
-      </item>
-     </layout>
     </item>
    </layout>
   </widget>

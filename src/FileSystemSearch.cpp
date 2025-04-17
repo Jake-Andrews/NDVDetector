@@ -9,12 +9,56 @@
 #include <unordered_set>
 #include <vector>
 
-#ifdef __unix__
+#if defined(_WIN32)
+#    include <windows.h>
+#elif defined(__unix__)
 #    include <sys/stat.h>
 #endif
 
-std::vector<VideoInfo>
-getVideosFromPath(std::filesystem::path const& root,
+namespace {
+
+#ifdef _WIN32
+bool get_file_identity(const std::filesystem::path& path, long& inode, long& device, int& nlinks)
+{
+    HANDLE hFile = CreateFileW(path.c_str(), 0, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (hFile == INVALID_HANDLE_VALUE)
+        return false;
+
+    BY_HANDLE_FILE_INFORMATION fileInfo;
+    bool success = GetFileInformationByHandle(hFile, &fileInfo);
+    CloseHandle(hFile);
+
+    if (!success)
+        return false;
+
+    inode = (static_cast<uint64_t>(fileInfo.nFileIndexHigh) << 32) | fileInfo.nFileIndexLow;
+    device = static_cast<long>(fileInfo.dwVolumeSerialNumber);
+    nlinks = static_cast<int>(fileInfo.nNumberOfLinks);
+    return true;
+}
+#elif defined(__unix__)
+bool get_file_identity(const std::filesystem::path& path, long& inode, long& device, int& nlinks)
+{
+    struct stat st;
+    if (stat(path.c_str(), &st) != 0)
+        return false;
+
+    inode = static_cast<long>(st.st_ino);
+    device = static_cast<long>(st.st_dev);
+    nlinks = static_cast<int>(st.st_nlink);
+    return true;
+}
+#else
+bool get_file_identity(const std::filesystem::path&, long&, long&, int&)
+{
+    return false; // Not supported
+}
+#endif
+
+} // namespace
+
+std::vector<VideoInfo> getVideosFromPath(std::filesystem::path const& root,
     std::unordered_set<std::string> const& extensions)
 {
     std::vector<VideoInfo> results;
@@ -24,12 +68,10 @@ getVideosFromPath(std::filesystem::path const& root,
         return results;
     }
 
-    for (auto it = std::filesystem::recursive_directory_iterator(
-             root,
-             std::filesystem::directory_options::skip_permission_denied,
-             ec);
+    for (auto it = std::filesystem::recursive_directory_iterator(root, std::filesystem::directory_options::skip_permission_denied, ec);
         it != std::filesystem::recursive_directory_iterator();
         it.increment(ec)) {
+
         if (ec) {
             std::cerr << "[Warning] Skipping due to error: " << ec.message() << "\n";
             continue;
@@ -47,10 +89,9 @@ getVideosFromPath(std::filesystem::path const& root,
                 VideoInfo video;
                 video.path = absPath.string();
 
-                // Try to get last_write_time as a Unix timestamp
+                // Get modification time
                 auto ftime = std::filesystem::last_write_time(absPath, ec);
                 if (!ec) {
-                    // You need C++20 for clock_cast; otherwise use a manual cast
                     auto fileTimePoint = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
                         ftime - decltype(ftime)::clock::now() + std::chrono::system_clock::now());
                     auto sctp = std::chrono::system_clock::to_time_t(fileTimePoint);
@@ -58,13 +99,11 @@ getVideosFromPath(std::filesystem::path const& root,
                 }
 
                 video.created_at = "";
-
                 video.size = static_cast<int>(std::filesystem::file_size(absPath, ec));
                 if (ec) {
                     video.size = 0;
                 }
 
-                // Defaults for now; set later after FFmpeg analysis
                 video.video_codec.clear();
                 video.audio_codec.clear();
                 video.width = 0;
@@ -74,14 +113,12 @@ getVideosFromPath(std::filesystem::path const& root,
                 video.sample_rate_avg = 0;
                 video.avg_frame_rate = 0.0;
 
-#ifdef __unix__
-                struct stat st;
-                if (stat(absPath.c_str(), &st) == 0) {
-                    video.inode = static_cast<long>(st.st_ino);
-                    video.device = static_cast<long>(st.st_dev);
-                    video.num_hard_links = static_cast<int>(st.st_nlink);
+                if (!get_file_identity(absPath, video.inode, video.device, video.num_hard_links)) {
+                    video.inode = -1;
+                    video.device = -1;
+                    video.num_hard_links = 1;
                 }
-#endif
+
                 results.push_back(std::move(video));
             }
         }
@@ -93,22 +130,10 @@ getVideosFromPath(std::filesystem::path const& root,
 bool validate_directory(std::filesystem::path const& root)
 {
     std::error_code ec;
-
-    if (!std::filesystem::exists(root, ec)) {
-        std::cerr << "Path does not exist: " << root.string() << '\n';
-        if (ec) {
-            std::cerr << "Error: " << ec.message() << '\n';
-        }
+    if (!std::filesystem::exists(root, ec) || !std::filesystem::is_directory(root, ec)) {
+        std::cerr << "Invalid directory: " << root << (ec ? (" (" + ec.message() + ")") : "") << '\n';
         return false;
     }
-
-    if (!std::filesystem::is_directory(root, ec)) {
-        std::cerr << "Not a directory: " << root.string() << '\n';
-        if (ec) {
-            std::cerr << "Error: " << ec.message() << '\n';
-        }
-        return false;
-    }
-
     return true;
 }
+
