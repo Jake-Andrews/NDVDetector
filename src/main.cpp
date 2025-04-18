@@ -27,6 +27,16 @@ int main(int argc, char* argv[])
         &w,
         &MainWindow::onDuplicateGroupsUpdated);
 
+    QObject::connect(&w, &MainWindow::databaseLoadRequested,
+        &controller, &VideoController::loadDatabase);
+    QObject::connect(&w, &MainWindow::databaseCreateRequested,
+        &controller, &VideoController::createDatabase);
+
+    QObject::connect(&controller, &VideoController::databaseOpened,
+        &w, &MainWindow::setCurrentDatabase);
+
+    w.setCurrentDatabase(QString::fromUtf8("videos.db"));
+
     QObject::connect(&w, &MainWindow::searchTriggered,
         [&] {
             controller.startSearchAndDetection();

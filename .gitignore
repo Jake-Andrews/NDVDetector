@@ -3,5 +3,5 @@ build/
 videos/
 videos_copy/
 thumbnails/
-videos.db
+*.db
 *.png

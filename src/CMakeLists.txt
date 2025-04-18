@@ -16,6 +16,7 @@ target_link_libraries(NDVDetector PRIVATE
     SQLite::SQLite3
     hftrie
     Qt6::Widgets
+    spdlog::spdlog
 )
 
 qt_finalize_executable(NDVDetector)

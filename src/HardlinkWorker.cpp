@@ -1,4 +1,5 @@
 #include "HardlinkWorker.h"
+#include "DatabaseManager.h"
 #include <QDebug>
 #include <chrono>
 

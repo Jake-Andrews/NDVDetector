@@ -31,6 +31,8 @@ pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
 
 find_package(SQLite3 REQUIRED)
 
+find_package(spdlog REQUIRED)
+
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
 qt_standard_project_setup()
 

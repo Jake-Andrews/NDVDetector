@@ -56,10 +56,13 @@ signals:
 
     void addDirectoryRequested(const QString& dirPath);
     void removeSelectedDirectoriesRequested(const QStringList& dirsToRemove);
+    void databaseLoadRequested(QString const& file);
+    void databaseCreateRequested(QString const& file); 
 
 public slots:
     void onDirectoryListUpdated(const QStringList& directories);
     void onDuplicateGroupsUpdated(std::vector<std::vector<VideoInfo>> const& groups);
+    void setCurrentDatabase(QString const& file);
 
 private slots:
     void onSearchClicked();
@@ -73,6 +76,8 @@ private slots:
     void onAddDirectoryButtonClicked();
     void onPickDirectoryButtonClicked();
     void onRemoveDirectoryButtonClicked();
+    void onLoadDbClicked();
+    void onNewDbClicked();
 
 private:
     Ui::MainWindow *ui;

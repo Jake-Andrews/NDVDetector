@@ -23,6 +23,7 @@ MainWindow::MainWindow(QWidget* parent)
     ui->setupUi(this);
 
     ui->directoryPanel->setVisible(true);
+    ui->currentDbLineEdit->clear();
 
     // Set up QTableView
     // Set up QTableView
@@ -66,6 +67,11 @@ MainWindow::MainWindow(QWidget* parent)
             view->selectionModel()->clear();
         }
     });
+
+    connect(ui->loadDbButton, &QPushButton::clicked,
+        this, &MainWindow::onLoadDbClicked);
+    connect(ui->newDbButton, &QPushButton::clicked,
+        this, &MainWindow::onNewDbClicked);
 
     connect(ui->addDirectoryButton, &QPushButton::clicked,
         this, &MainWindow::onAddDirectoryButtonClicked);
@@ -274,4 +280,23 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event)
     }
 
     return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::onLoadDbClicked()
+{
+    QString f = QFileDialog::getOpenFileName(this, "Open Database", {}, "*.db");
+    if (!f.isEmpty())
+        emit databaseLoadRequested(f);
+}
+
+void MainWindow::onNewDbClicked()
+{
+    QString f = QFileDialog::getSaveFileName(this, "New Database", {}, "*.db");
+    if (!f.isEmpty())
+        emit databaseCreateRequested(f);
+}
+
+void MainWindow::setCurrentDatabase(QString const& path)
+{
+    ui->currentDbLineEdit->setText(path);
 }

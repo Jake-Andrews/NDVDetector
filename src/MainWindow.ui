@@ -162,13 +162,37 @@
            <string>Display Options</string>
           </property>
           <layout class="QVBoxLayout" name="displaySettingsLayout">
-           <item>
-            <widget class="QCheckBox" name="singleLinkCheckBox">
-             <property name="text">
-              <string>Only display one link per file (inode/device)</string>
-             </property>
-            </widget>
-           </item>
+            <!-- show current DB file path -->
+            <item>
+              <layout class="QHBoxLayout" name="dbStatusLayout">
+                <item>
+                  <widget class="QLabel" name="currentDbLabel">
+                    <property name="text">
+                      <string>Current DB:</string>
+                    </property>
+                  </widget>
+                </item>
+                <item>
+                  <widget class="QLineEdit" name="currentDbLineEdit">
+                    <property name="readOnly"><bool>true</bool></property>
+                  </widget>
+                </item>
+              </layout>
+            </item>
+            <item>
+            <!-- load DB button -->
+             <widget class="QPushButton" name="loadDbButton">
+              <property name="text"><string>Open Database…</string></property>
+             </widget>
+            </item>
+            <item>
+            <!-- new DB button -->
+             <widget class="QPushButton" name="newDbButton">
+              <property name="text">
+               <string>New Database…</string>
+              </property>
+             </widget>
+            </item>
           </layout>
          </widget>
         </item>

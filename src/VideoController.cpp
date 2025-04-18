@@ -286,3 +286,30 @@ void VideoController::handleHardlink()
 
     t->start();
 }
+
+void VideoController::loadDatabase(QString const& path)
+{
+    if (!m_db.open(path, /*createIfMissing*/ false)) {
+        emit errorOccurred(tr("Unable to open database:\n%1").arg(path));
+        return;
+    }
+
+    auto groups = m_db.loadDuplicateGroups();
+    if (m_model)
+        m_model->setGroupedVideos(groups);
+
+    emit databaseOpened(path);
+}
+
+void VideoController::createDatabase(QString const& path)
+{
+    if (!m_db.open(path, /*createIfMissing*/ true)) {
+        emit errorOccurred(tr("Unable to create database:\n%1").arg(path));
+        return;
+    }
+
+    if (m_model)
+        m_model->setGroupedVideos({});
+
+    emit databaseOpened(path);
+}

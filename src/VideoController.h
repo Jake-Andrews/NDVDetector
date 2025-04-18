@@ -35,6 +35,8 @@ public slots:
     void handleSortGroupsOption(MainWindow::SortOptions option, bool ascending);
     void handleDeleteOption(MainWindow::DeleteOptions option);
     void handleHardlink();
+    void loadDatabase(QString const& path);
+    void createDatabase(QString const& path);
 
 
 signals:
@@ -46,6 +48,8 @@ signals:
 
     void updateProgress(QString status, int current, int total);
     void searchCompleted();
+
+    void databaseOpened(QString const& path);
 
 private:
     DatabaseManager& m_db;

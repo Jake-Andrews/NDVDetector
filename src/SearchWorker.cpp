@@ -51,7 +51,11 @@ void SearchWorker::process()
 
         auto all = m_db.getAllVideos();
         auto hashes = m_db.getAllHashGroups();
-        emit finished(findDuplicates(std::move(all), hashes, 4, 5));
+
+        auto groups = findDuplicates(std::move(all), hashes, 4, 5);
+        m_db.storeDuplicateGroups(groups);
+        emit finished(std::move(groups));
+
     } catch (std::exception const& e) {
         emit error(QString::fromStdString(e.what()));
     } catch (...) {
