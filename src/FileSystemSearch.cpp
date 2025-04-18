@@ -89,7 +89,6 @@ std::vector<VideoInfo> getVideosFromPath(std::filesystem::path const& root,
                 VideoInfo video;
                 video.path = absPath.string();
 
-                // Get modification time
                 auto ftime = std::filesystem::last_write_time(absPath, ec);
                 if (!ec) {
                     auto fileTimePoint = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
@@ -136,4 +135,3 @@ bool validate_directory(std::filesystem::path const& root)
     }
     return true;
 }
-

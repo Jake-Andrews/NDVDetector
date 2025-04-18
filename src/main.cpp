@@ -54,18 +54,18 @@ int main(int argc, char* argv[])
             controller.handleDeleteOption(option);
         });
 
-    // Connect directory signals
+    QObject::connect(&w, &MainWindow::hardlinkTriggered,
+        &controller, &VideoController::handleHardlink);
+
     QObject::connect(&w, &MainWindow::addDirectoryRequested,
         &controller, &VideoController::onAddDirectoryRequested);
 
     QObject::connect(&w, &MainWindow::removeSelectedDirectoriesRequested,
         &controller, &VideoController::onRemoveSelectedDirectoriesRequested);
 
-    // Connect for updating the UI’s directory list
     QObject::connect(&controller, &VideoController::directoryListUpdated,
         &w, &MainWindow::onDirectoryListUpdated);
 
-    // Optionally connect for errors
     QObject::connect(&controller, &VideoController::errorOccurred,
         [&](QString msg) {
             QMessageBox::critical(&w, "Error", msg);

@@ -34,6 +34,7 @@ public slots:
     void handleSortOption(MainWindow::SortOptions option, bool ascending);
     void handleSortGroupsOption(MainWindow::SortOptions option, bool ascending);
     void handleDeleteOption(MainWindow::DeleteOptions option);
+    void handleHardlink();
 
 
 signals:

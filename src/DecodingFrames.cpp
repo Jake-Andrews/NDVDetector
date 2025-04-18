@@ -64,7 +64,6 @@ QString hashPath(QString const& path)
 
 }
 
-// **Fix: Support for channels**
 std::vector<CImg<float>> decode_video_frames_as_cimg(
     std::string const& file_path,
     double skip_percent,
@@ -78,7 +77,7 @@ std::vector<CImg<float>> decode_video_frames_as_cimg(
 
     std::vector<CImg<float>> frames;
 
-    // 2) Open the input file
+    // 1) Open the input file
     AVFormatContext* rawFmtCtx = nullptr;
     if (avformat_open_input(&rawFmtCtx, file_path.c_str(), nullptr, nullptr) < 0) {
         std::cerr << "[Error] Failed to open input file: " << file_path << "\n";
@@ -86,13 +85,13 @@ std::vector<CImg<float>> decode_video_frames_as_cimg(
     }
     FormatContextPtr formatCtx(rawFmtCtx, free_format_ctx);
 
-    // 3) Read stream info
+    // 2) Read stream info
     if (avformat_find_stream_info(formatCtx.get(), nullptr) < 0) {
         std::cerr << "[Error] Failed to find stream info in: " << file_path << "\n";
         return {};
     }
 
-    // 4) Find video stream
+    // 3) Find video stream
     AVCodec const* codec = nullptr;
     AVCodecParameters* codecParams = nullptr;
     int videoStreamIndex = -1;
@@ -115,7 +114,7 @@ std::vector<CImg<float>> decode_video_frames_as_cimg(
         return {};
     }
 
-    // 5) Create and open codec context
+    // 4) Create and open codec context
     CodecContextPtr codecCtx(avcodec_alloc_context3(codec), free_codec_ctx);
     if (!codecCtx) {
         std::cerr << "[Error] Failed to allocate AVCodecContext.\n";
@@ -130,13 +129,13 @@ std::vector<CImg<float>> decode_video_frames_as_cimg(
         return {};
     }
 
-    // 6) Calculate skip intervals
+    // 5) Calculate skip intervals
     double start_time_sec = video_duration_sec * skip_percent;
     double end_time_sec = video_duration_sec * (1.0 - skip_percent);
     std::cout << "[INFO] skip_percent: " << skip_percent << ", video_duration_sec: " << video_duration_sec << ", start_time_sec: " << start_time_sec << ", end_time_sec: " << end_time_sec << "\n";
     AVRational time_base = formatCtx->streams[videoStreamIndex]->time_base;
 
-    // 7) Seek to start_time_sec
+    // 6) Seek to start_time_sec
     int64_t seek_target = static_cast<int64_t>(start_time_sec / av_q2d(time_base));
     if (av_seek_frame(formatCtx.get(), videoStreamIndex, seek_target, AVSEEK_FLAG_BACKWARD) < 0) {
         std::cerr << "[Warn] Failed to seek to start_time_sec: " << start_time_sec << "s\n";
@@ -144,7 +143,7 @@ std::vector<CImg<float>> decode_video_frames_as_cimg(
         avcodec_flush_buffers(codecCtx.get());
     }
 
-    // 8) Create swscale context to go from codecCtx->pix_fmt -> 32×32 grayscale
+    // 7) Create swscale context to go from codecCtx->pix_fmt -> 32×32 grayscale
     SwsContextPtr swsCtx(
         sws_getContext(codecCtx->width,
             codecCtx->height,
@@ -162,7 +161,7 @@ std::vector<CImg<float>> decode_video_frames_as_cimg(
         return {};
     }
 
-    // 9) Create two frames:
+    // 8) Create two frames:
     //    - decodeFrame: the one FFmpeg writes decoded data into
     //    - scaledFrame: the 32×32 grayscale we own
     FramePtr decodeFrame(av_frame_alloc(), free_frame);
@@ -186,14 +185,14 @@ std::vector<CImg<float>> decode_video_frames_as_cimg(
         return {};
     }
 
-    // 10) Create packet
+    // 9) Create packet
     PacketPtr packet(av_packet_alloc(), free_packet);
     if (!packet) {
         std::cerr << "[Error] Failed to allocate AVPacket.\n";
         return {};
     }
 
-    // 11) Reading + decoding loop
+    // 10) Reading + decoding loop
     double lastCaptureTime = -1.0;
     int framesCaptured = 0;
     constexpr int maxFramesToSave = 100;

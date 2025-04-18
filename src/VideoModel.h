@@ -34,12 +34,10 @@ public:
 
     explicit VideoModel(QObject* parent = nullptr);
 
-    // Show grouped videos with a separator row for each group
     void setGroupedVideos(std::vector<std::vector<VideoInfo>> const& groups);
 
     QSize span(const QModelIndex& index) const override;
 
-    // QAbstractTableModel overrides
     int rowCount(const QModelIndex &parent = QModelIndex()) const override;
     int columnCount(const QModelIndex &parent = QModelIndex()) const override;
     QVariant data(const QModelIndex &index, int role) const override;
@@ -61,10 +59,16 @@ public:
 
     void selectRow(int row);
 
-    // Data access
+    std::vector<std::vector<VideoInfo>> toGroups() const;
+
+    void updateVideoInfo(VideoInfo const& updated);
+
+    void updateVideosBulk(std::vector<VideoInfo> const& vidss);
+
     const RowEntry& rowEntry(int row) const;
     std::vector<VideoInfo> selectedVideos() const;
 
+    void fromGroups(std::vector<std::vector<VideoInfo>> const& groups);
 
 private:
     std::vector<RowEntry> m_rows;
@@ -76,9 +80,6 @@ private:
     void markAllExceptLargestInRange(int startRow, int endRow);
     void markAllExceptSmallestInRange(int startRow, int endRow);
 
-    // re-group the data for internal sorts
-    std::vector<std::vector<VideoInfo>> toGroups() const;
-    void fromGroups(std::vector<std::vector<VideoInfo>> const& groups);
 
     bool setData(const QModelIndex &index, const QVariant &value, int role) override;
 

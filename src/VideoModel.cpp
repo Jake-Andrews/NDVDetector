@@ -16,7 +16,7 @@ VideoModel::VideoModel(QObject* parent)
 
 void VideoModel::setGroupedVideos(std::vector<std::vector<VideoInfo>> const& groups)
 {
-    // 1) Filter out any groups that have fewer than 2 videos.
+    // Filter out any groups that have fewer than 2 videos.
     std::vector<std::vector<VideoInfo>> filteredGroups;
     filteredGroups.reserve(groups.size());
     for (auto const& g : groups) {
@@ -29,10 +29,9 @@ void VideoModel::setGroupedVideos(std::vector<std::vector<VideoInfo>> const& gro
     m_rows.clear();
     m_groupBoundaries.clear();
 
-    // 2) Proceed with normal insertion logic, but using filteredGroups now
     int groupIndex = 0;
     for (auto const& grp : filteredGroups) {
-        // Insert a 'Separator' row to label this group
+
         RowEntry sep;
         sep.type = RowType::Separator;
 
@@ -97,10 +96,8 @@ QVariant VideoModel::data(QModelIndex const& index, int role) const
         return {};
     }
 
-    // It's a video row
     bool isSelected = row.selected;
 
-    // For demonstration, let's show a check mark if selected, in col 0:
     if (role == Qt::CheckStateRole && index.column() == Col_Screenshot) {
         return isSelected ? Qt::Checked : Qt::Unchecked;
     }
@@ -135,7 +132,6 @@ QVariant VideoModel::data(QModelIndex const& index, int role) const
     } else if (role == Qt::DecorationRole && index.column() == Col_Screenshot) {
         auto const& vid = row.video.value();
 
-        // If we have a valid thumbnail path, try loading
         if (!vid.thumbnail_path.empty()) {
             QString thumbPath = QString::fromStdString(vid.thumbnail_path);
             QPixmap pix(thumbPath);
@@ -144,13 +140,11 @@ QVariant VideoModel::data(QModelIndex const& index, int role) const
                 return QIcon(scaled);
             }
         }
-        // Fallback icon if no valid thumbnail
-        // (You can create a QIcon(":/resources/placeholder.png") or simply return QVariant())
-        return {};
+        // fallback
+        return QIcon("./placeholder.png");
     }
 
     else if (role == Qt::TextAlignmentRole && index.column() == Col_Screenshot) {
-        // center screenshot
         return Qt::AlignCenter;
     }
 
@@ -232,10 +226,6 @@ void VideoModel::selectRow(int row)
     }
 }
 
-/*!
- * \brief selectAllExceptLargest
- *        Mark all video rows in each group as selected except for the largest
- */
 void VideoModel::selectAllExceptLargest()
 {
     // Clear all existing selections
@@ -245,7 +235,7 @@ void VideoModel::selectAllExceptLargest()
         }
     }
 
-    // We'll parse row by row
+    // Parse row by row
     int currentGroupStart = -1;
     int currentGroupEnd = -1;
 
@@ -279,7 +269,6 @@ void VideoModel::selectAllExceptLargest()
 
 void VideoModel::selectAllExceptSmallest()
 {
-    // Clear all existing selections
     for (auto& row : m_rows) {
         if (row.type == RowType::Video) {
             row.selected = false;
@@ -534,4 +523,33 @@ QSize VideoModel::span(QModelIndex const& index) const
             return QSize(1, 1); // inside the span → normal size
     }
     return QSize(1, 1); // normal cells
+}
+
+void VideoModel::updateVideoInfo(VideoInfo const& updated)
+{
+    for (int i = 0; i < static_cast<int>(m_rows.size()); ++i) {
+        auto& row = m_rows[i];
+        if (row.type != RowType::Video)
+            continue;
+
+        if (row.video->id == updated.id) {
+            row.video = updated;
+
+            for (int col = 0; col < Col_Count; ++col) {
+                QVector<int> roles = { Qt::DisplayRole, Qt::CheckStateRole };
+                if (col == Col_Screenshot)
+                    // force thumbnail to be refreshed
+                    roles.append(Qt::DecorationRole);
+                emit dataChanged(index(i, col), index(i, col), roles);
+            }
+
+            break;
+        }
+    }
+}
+
+void VideoModel::updateVideosBulk(std::vector<VideoInfo> const& vids)
+{
+    for (auto const& v : vids)
+        updateVideoInfo(v);
 }

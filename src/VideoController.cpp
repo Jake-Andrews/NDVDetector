@@ -1,4 +1,5 @@
 #include "VideoController.h"
+#include "HardlinkWorker.h"
 #include "SearchWorker.h"
 #include "VideoModel.h"
 
@@ -22,12 +23,11 @@ void VideoController::startSearchAndDetection()
         return;
     }
 
-    // 1) Create progress dialog
     auto* progressDialog = new QProgressDialog(
         "Searching for videos...",
         "Cancel",
-        0,   // min
-        100, // max (we’ll adjust dynamically)
+        0,
+        100, // placeholder, gets updated to the actual max # later
         nullptr);
     progressDialog->setWindowTitle("Searching");
     progressDialog->setWindowModality(Qt::ApplicationModal);
@@ -35,12 +35,12 @@ void VideoController::startSearchAndDetection()
     progressDialog->setAutoReset(false);
     progressDialog->show();
 
-    // 2) Create worker and thread
+    // Create worker and thread
     QThread* thread = new QThread(this); // parent is this, so it cleans up
     SearchWorker* worker = new SearchWorker(m_db, m_directories);
     worker->moveToThread(thread);
 
-    // 3) Connect signals/slots
+    // Connect signals/slots
     connect(thread, &QThread::started, worker, &SearchWorker::process);
 
     // Update UI with # files found
@@ -58,7 +58,7 @@ void VideoController::startSearchAndDetection()
                 QString("Hashing videos... %1/%2 done").arg(done).arg(total));
         });
 
-    // If an error occurs
+    // On error
     connect(worker, &SearchWorker::error, progressDialog,
         [progressDialog](QString msg) {
             QMessageBox::critical(progressDialog, "Error", msg);
@@ -67,14 +67,11 @@ void VideoController::startSearchAndDetection()
     // On finished
     connect(worker, &SearchWorker::finished, this,
         [=, this](std::vector<std::vector<VideoInfo>> duplicates) {
-            // 1) close the dialog
             progressDialog->close();
             progressDialog->deleteLater();
 
-            // 2) send them to the view
             emit duplicateGroupsUpdated(std::move(duplicates));
 
-            // 3) cleanup
             thread->quit();
         });
 
@@ -82,15 +79,13 @@ void VideoController::startSearchAndDetection()
     connect(thread, &QThread::finished, worker, &SearchWorker::deleteLater);
     connect(thread, &QThread::finished, thread, &QThread::deleteLater);
 
-    // 4) If user clicks cancel button
+    // If user clicks cancel button
     connect(progressDialog, &QProgressDialog::canceled, this, [=]() {
-        // you might want to requestStop for the worker or forcibly kill the thread.
-        // For now, let's just do:
+        // **should requestStop for the worker or forcibly kill the thread**
         thread->requestInterruption();
         progressDialog->setLabelText("Canceling...");
     });
 
-    // 5) Start the thread
     thread->start();
 }
 
@@ -98,19 +93,16 @@ void VideoController::onAddDirectoryRequested(QString const& path)
 {
     std::filesystem::path fsPath(path.toStdString());
     if (!std::filesystem::exists(fsPath) || !std::filesystem::is_directory(fsPath)) {
-        // Directory invalid -> emit an error signal
         emit errorOccurred(QString("Directory does not exist:\n%1").arg(path));
         return;
     }
 
-    // It's valid, so add to our list if not already present
     if (!m_directories.contains(path)) {
         m_directories << path;
         emit directoryListUpdated(m_directories);
     }
 }
 
-// Called by UI to remove selected directories
 void VideoController::onRemoveSelectedDirectoriesRequested(QStringList const& dirs)
 {
     for (auto const& d : dirs) {
@@ -165,32 +157,35 @@ void VideoController::handleDeleteOption(MainWindow::DeleteOptions option)
         return;
 
     switch (option) {
+
     case MainWindow::DeleteOptions::List: {
         m_model->deleteSelectedVideosFromList();
         break;
     }
+
     case MainWindow::DeleteOptions::ListDB: {
-        // 1) gather all selected videos
+        // gather all selected videos
         auto selected = m_model->selectedVideos();
-        // 2) delete them from DB
+        // delete them from DB
         for (auto const& v : selected) {
             if (v.id > 0) {
                 m_db.deleteVideo(v.id);
             }
         }
-        // 3) remove from model
+        // remove from model
         std::vector<int> videoIds;
         videoIds.reserve(selected.size());
         for (auto const& vid : selected) {
             videoIds.push_back(vid.id);
         }
+
         m_model->removeVideosFromModel(videoIds);
         break;
     }
+
     case MainWindow::DeleteOptions::Disk: {
-        // 1) gather all selected videos
         auto selected = m_model->selectedVideos();
-        // 2) remove from disk and DB
+
         for (auto const& v : selected) {
             if (!v.path.empty()) {
                 try {
@@ -208,7 +203,7 @@ void VideoController::handleDeleteOption(MainWindow::DeleteOptions option)
                 m_db.deleteVideo(v.id);
             }
         }
-        // 3) remove from model
+
         std::vector<int> videoIds;
         videoIds.reserve(selected.size());
         for (auto const& vid : selected) {
@@ -230,4 +225,64 @@ void VideoController::setModel(VideoModel* model)
         return;
     }
     m_model = model;
+}
+
+void VideoController::handleHardlink()
+{
+    if (!m_model)
+        return;
+
+    // collect selected UI state
+    auto selected = m_model->selectedVideos();
+    if (selected.empty())
+        return;
+
+    QSet<int> selectedIds;
+    for (auto const& v : selected)
+        selectedIds.insert(v.id);
+
+    // grouped view of all rows
+    auto groups = m_model->toGroups();
+
+    // progress dialog
+    auto* dlg = new QProgressDialog("Hard‑linking videos...", "Cancel", 0,
+        static_cast<int>(groups.size()), nullptr);
+    dlg->setWindowModality(Qt::ApplicationModal);
+    dlg->setAutoClose(false);
+    dlg->show();
+
+    // worker thread
+    QThread* t = new QThread(this);
+    auto* wk = new HardlinkWorker(m_db, std::move(groups), std::move(selectedIds));
+    wk->moveToThread(t);
+
+    connect(t, &QThread::started, wk, &HardlinkWorker::process);
+    connect(wk, &HardlinkWorker::progress, dlg, &QProgressDialog::setValue);
+
+    connect(wk, &HardlinkWorker::finished, this,
+        [=, this](std::vector<std::vector<VideoInfo>> updatedGroups,
+            int links, int errs) {
+            dlg->close();
+            dlg->deleteLater();
+
+            //  UI update
+            m_model->fromGroups(updatedGroups);
+
+            QString msg = tr("Hard‑linking complete.\n%1 file(s) hard‑linked.\n%2 error(s).")
+                              .arg(links)
+                              .arg(errs);
+            QMessageBox::information(nullptr, tr("Done"), msg);
+
+            t->quit();
+        });
+
+    connect(t, &QThread::finished, wk, &HardlinkWorker::deleteLater);
+    connect(t, &QThread::finished, t, &QThread::deleteLater);
+
+    connect(dlg, &QProgressDialog::canceled, this, [=] {
+        t->requestInterruption();
+        dlg->setLabelText("Canceling…");
+    });
+
+    t->start();
 }

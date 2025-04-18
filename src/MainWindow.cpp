@@ -35,13 +35,10 @@ MainWindow::MainWindow(QWidget* parent)
         hHeader->setStretchLastSection(true);
     }
 
-    // Set the delegate once
     view->setItemDelegate(new GroupRowDelegate(this));
 
-    // Install the event filter
     ui->tableView->viewport()->installEventFilter(this);
 
-    // Remove grid lines so group separator rows appear continuous
     view->setShowGrid(false);
 
     // Entire row highlight
@@ -70,7 +67,6 @@ MainWindow::MainWindow(QWidget* parent)
         }
     });
 
-    // Connect the add/remove directory UI
     connect(ui->addDirectoryButton, &QPushButton::clicked,
         this, &MainWindow::onAddDirectoryButtonClicked);
     connect(ui->pickDirectoryButton, &QToolButton::clicked,
@@ -78,12 +74,13 @@ MainWindow::MainWindow(QWidget* parent)
     connect(ui->removeDirectoryButton, &QPushButton::clicked,
         this, &MainWindow::onRemoveDirectoryButtonClicked);
 
-    // Connect the five bottom buttons to local slots
     connect(ui->searchButton, &QPushButton::clicked, this, &MainWindow::onSearchClicked);
     connect(ui->selectButton, &QPushButton::clicked, this, &MainWindow::onSelectClicked);
     connect(ui->sortButton, &QPushButton::clicked, this, &MainWindow::onSortClicked);
     connect(ui->sortGroupsButton, &QPushButton::clicked, this, &MainWindow::onSortGroupsClicked);
     connect(ui->deleteButton, &QPushButton::clicked, this, &MainWindow::onDeleteClicked);
+    connect(ui->hardlinkButton, &QPushButton::clicked,
+        this, &MainWindow::onHardlinkClicked);
 
     connect(ui->tableView->selectionModel(), &QItemSelectionModel::selectionChanged,
         this, [&](QItemSelection const& selected, QItemSelection const&) {
@@ -114,7 +111,6 @@ void MainWindow::setDuplicateVideoGroups(std::vector<std::vector<VideoInfo>> con
     m_model->setGroupedVideos(groups);
 }
 
-// This slot is called when the controller signals that new duplicates are available
 void MainWindow::onDuplicateGroupsUpdated(std::vector<std::vector<VideoInfo>> const& groups)
 {
     qDebug() << "[MainWindow] Received new duplicate groups with size:" << groups.size();
@@ -196,6 +192,11 @@ void MainWindow::onDeleteClicked()
     } else if (chosen == delFromDisk) {
         emit deleteOptionChosen(DeleteOptions::Disk);
     }
+}
+
+void MainWindow::onHardlinkClicked()
+{
+    emit hardlinkTriggered();
 }
 
 void MainWindow::onAddDirectoryButtonClicked()

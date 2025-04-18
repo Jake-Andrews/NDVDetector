@@ -52,6 +52,7 @@ signals:
     void sortOptionChosen(MainWindow::SortOptions option);
     void sortGroupsOptionChosen(MainWindow::SortOptions option);
     void deleteOptionChosen(MainWindow::DeleteOptions option);
+    void hardlinkTriggered();
 
     void addDirectoryRequested(const QString& dirPath);
     void removeSelectedDirectoriesRequested(const QStringList& dirsToRemove);
@@ -66,6 +67,7 @@ private slots:
     void onSortClicked();
     void onSortGroupsClicked();
     void onDeleteClicked();
+    void onHardlinkClicked();
     void onRowActivated(const QModelIndex& index);
 
     void onAddDirectoryButtonClicked();

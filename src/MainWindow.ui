@@ -125,6 +125,17 @@
            </widget>
           </item>
           <item>
+           <widget class="QPushButton" name="hardlinkButton">
+            <property name="text"><string>Hardlink</string></property>
+            <property name="minimumSize">
+             <size><width>100</width><height>40</height></size>
+            </property>
+            <property name="toolTip">
+             <string>This will hardlink all selected videos to the first video in each group. Requires 2 or more selected videos per group.</string>
+            </property>
+           </widget>
+          </item>
+          <item>
            <spacer name="horizontalSpacer">
             <property name="orientation">
              <enum>Qt::Horizontal</enum>

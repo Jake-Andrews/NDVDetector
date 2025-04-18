@@ -95,7 +95,6 @@ public:
         void const* dataPtr = static_cast<void const*>(pHashes.data());
 
         // 3) Bind the blob
-        // Flags: SQLITE_TRANSIENT means SQLite makes its own copy
         sqlite3_bind_blob(stmt, 2, dataPtr, static_cast<int>(numBytes), SQLITE_TRANSIENT);
 
         if (sqlite3_step(stmt) != SQLITE_DONE) {
@@ -206,6 +205,137 @@ public:
         sqlite3_finalize(stmt);
     }
 
+    void copyMetadataExceptPath(int targetId, int destinationId) {
+        // Copy all fields from target to destination except path and id
+        std::string const sql = R"(
+            UPDATE video
+            SET created_at = (SELECT created_at FROM video WHERE id = ?),
+                modified_at = (SELECT modified_at FROM video WHERE id = ?),
+                video_codec = (SELECT video_codec FROM video WHERE id = ?),
+                audio_codec = (SELECT audio_codec FROM video WHERE id = ?),
+                width = (SELECT width FROM video WHERE id = ?),
+                height = (SELECT height FROM video WHERE id = ?),
+                duration = (SELECT duration FROM video WHERE id = ?),
+                size = (SELECT size FROM video WHERE id = ?),
+                bit_rate = (SELECT bit_rate FROM video WHERE id = ?),
+                num_hard_links = (SELECT num_hard_links FROM video WHERE id = ?),
+                inode = (SELECT inode FROM video WHERE id = ?),
+                device = (SELECT device FROM video WHERE id = ?),
+                sample_rate_avg = (SELECT sample_rate_avg FROM video WHERE id = ?),
+                avg_frame_rate = (SELECT avg_frame_rate FROM video WHERE id = ?),
+                thumbnail_path = (SELECT thumbnail_path FROM video WHERE id = ?)
+            WHERE id = ?;
+        )";
+
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(m_db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+            std::cerr << "[DB] Failed to prepare metadata copy: " << sqlite3_errmsg(m_db) << "\n";
+            return;
+        }
+
+        for (int i = 1; i <= 15; ++i)
+            sqlite3_bind_int(stmt, i, targetId);
+        sqlite3_bind_int(stmt, 16, destinationId);
+
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            std::cerr << "[DB] Failed to update video: " << sqlite3_errmsg(m_db) << "\n";
+        }
+
+        sqlite3_finalize(stmt);
+    }
+
+    void updateHardLinkCount(int videoId, int count) {
+        std::string const sql = R"(
+            UPDATE video
+            SET num_hard_links = ?
+            WHERE id = ?;
+        )";
+
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(m_db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+            std::cerr << "[DB] Failed to prepare updateHardLinkCount: " << sqlite3_errmsg(m_db) << "\n";
+            return;
+        }
+
+        sqlite3_bind_int(stmt, 1, count);
+        sqlite3_bind_int(stmt, 2, videoId);
+
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            std::cerr << "[DB] Failed to update hard link count: " << sqlite3_errmsg(m_db) << "\n";
+        }
+
+        sqlite3_finalize(stmt);
+    }
+
+    void beginTransaction() {
+        execStatement("BEGIN TRANSACTION;");
+    }
+
+    void commit() {
+        execStatement("COMMIT;");
+    }
+
+    void updateVideoInfo(VideoInfo const& v) {
+        static char const* sql = R"(
+            UPDATE video
+            SET
+                path             = ?,
+                created_at       = ?,
+                modified_at      = ?,
+                video_codec      = ?,
+                audio_codec      = ?,
+                width            = ?,
+                height           = ?,
+                duration         = ?,
+                size             = ?,
+                bit_rate         = ?,
+                num_hard_links   = ?,
+                inode            = ?,
+                device           = ?,
+                sample_rate_avg  = ?,
+                avg_frame_rate   = ?,
+                thumbnail_path   = ?
+            WHERE id = ?;
+        )";
+
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            std::cerr << "[DB] Failed to prepare updateVideoInfo: "
+                      << sqlite3_errmsg(m_db) << "\n";
+            return;
+        }
+
+        // Bind all columns in the same order as the SET list above:
+        sqlite3_bind_text   (stmt,  1, v.path.c_str(),             -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text   (stmt,  2, v.created_at.c_str(),       -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text   (stmt,  3, v.modified_at.c_str(),      -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text   (stmt,  4, v.video_codec.c_str(),      -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text   (stmt,  5, v.audio_codec.c_str(),      -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int    (stmt,  6, v.width);
+        sqlite3_bind_int    (stmt,  7, v.height);
+        sqlite3_bind_int    (stmt,  8, v.duration);
+        sqlite3_bind_int    (stmt,  9, v.size);
+        sqlite3_bind_int    (stmt, 10, v.bit_rate);
+        sqlite3_bind_int    (stmt, 11, v.num_hard_links);
+        sqlite3_bind_int64  (stmt, 12, static_cast<sqlite3_int64>(v.inode));
+        sqlite3_bind_int64  (stmt, 13, static_cast<sqlite3_int64>(v.device));
+        sqlite3_bind_int    (stmt, 14, v.sample_rate_avg);
+        sqlite3_bind_double (stmt, 15, v.avg_frame_rate);
+        sqlite3_bind_text   (stmt, 16, v.thumbnail_path.c_str(),  -1, SQLITE_TRANSIENT);
+
+        // Finally bind the WHERE id = ?
+        sqlite3_bind_int    (stmt, 17, v.id);
+
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            std::cerr << "[DB] Failed to update videoInfo: "
+                      << sqlite3_errmsg(m_db) << "\n";
+        }
+
+        sqlite3_finalize(stmt);
+    }
+
+
+
 private:
     sqlite3* m_db = nullptr;
 
@@ -253,4 +383,5 @@ private:
         }
     }
 };
+
 
