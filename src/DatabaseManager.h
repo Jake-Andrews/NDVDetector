@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <sqlite3.h>
 #include <QString>
+#include "SearchSettings.h"
 #include "Hash.h"
 #include "VideoInfo.h"
 
@@ -33,6 +34,9 @@
      void updateVideoInfo(VideoInfo const& v);
      void storeDuplicateGroups(std::vector<std::vector<VideoInfo>> const& groups);
      std::vector<std::vector<VideoInfo>> loadDuplicateGroups() const;
+
+    SearchSettings loadSettings() const; 
+    void saveSettings(SearchSettings const&);
  
      bool open(QString const& file, bool createIfMissing);
  

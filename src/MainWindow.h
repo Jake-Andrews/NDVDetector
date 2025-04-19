@@ -3,6 +3,7 @@
 #include <QMainWindow>
 #include <memory>
 #include <vector>
+#include "SearchSettings.h"
 #include "VideoInfo.h"
 
 
@@ -46,8 +47,10 @@ public:
     };
     Q_ENUM(SortOptions);
 
+    SearchSettings collectSearchSettings() const; 
+
 signals:
-    void searchTriggered();
+    void searchRequested(SearchSettings settings);
     void selectOptionChosen(MainWindow::SelectOptions option);
     void sortOptionChosen(MainWindow::SortOptions option);
     void sortGroupsOptionChosen(MainWindow::SortOptions option);
@@ -78,11 +81,13 @@ private slots:
     void onRemoveDirectoryButtonClicked();
     void onLoadDbClicked();
     void onNewDbClicked();
+    void onValidatePatternsClicked();
 
 private:
     Ui::MainWindow *ui;
     std::unique_ptr<VideoModel> m_model;
     bool eventFilter(QObject* watched, QEvent* event) override; 
+    std::vector<DirectoryEntry> getDirectorySettings() const;
 };
 
 

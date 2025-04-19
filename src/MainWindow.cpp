@@ -1,5 +1,7 @@
 #include "MainWindow.h"
 #include "GroupRowDelegate.h"
+#include "RegexTesterDialog.h"
+#include "SearchSettings.h"
 #include "VideoModel.h"
 #include "ui_MainWindow.h"
 
@@ -11,8 +13,11 @@
 #include <QHeaderView>
 #include <QKeyEvent>
 #include <QMenu>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QTableView>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
 #include <QUrl>
 
 MainWindow::MainWindow(QWidget* parent)
@@ -66,6 +71,13 @@ MainWindow::MainWindow(QWidget* parent)
             // Clear the selection when clicking on separator rows
             view->selectionModel()->clear();
         }
+    });
+
+    connect(ui->validatePatternsButton, &QPushButton::clicked,
+        this, &MainWindow::onValidatePatternsClicked);
+
+    connect(ui->regexTesterButton, &QPushButton::clicked, this, [this] {
+        RegexTesterDialog(this).exec();
     });
 
     connect(ui->loadDbButton, &QPushButton::clicked,
@@ -126,7 +138,8 @@ void MainWindow::onDuplicateGroupsUpdated(std::vector<std::vector<VideoInfo>> co
 
 void MainWindow::onSearchClicked()
 {
-    emit searchTriggered();
+    SearchSettings cfg = collectSearchSettings();
+    emit searchRequested(cfg);
 }
 
 void MainWindow::onSelectClicked()
@@ -230,7 +243,7 @@ void MainWindow::onRemoveDirectoryButtonClicked()
 
     QStringList dirsToRemove;
     for (auto* item : selectedItems) {
-        dirsToRemove << item->text();
+        dirsToRemove << item->text(0);
     }
     emit removeSelectedDirectoriesRequested(dirsToRemove);
 }
@@ -238,8 +251,21 @@ void MainWindow::onRemoveDirectoryButtonClicked()
 void MainWindow::onDirectoryListUpdated(QStringList const& directories)
 {
     ui->directoryListWidget->clear();
-    for (auto const& dir : directories) {
-        ui->directoryListWidget->addItem(dir);
+    for (auto const& dirPath : directories) {
+        auto* item = new QTreeWidgetItem(ui->directoryListWidget);
+        item->setText(0, dirPath);           // Column 0: path
+        item->setCheckState(1, Qt::Checked); // Default recursive enabled
+    }
+
+    // Set headers for columns if not already set
+    if (ui->directoryListWidget->headerItem()->text(0).isEmpty()) {
+        QStringList headers;
+        headers << "Directory" << "Recursive";
+        ui->directoryListWidget->setHeaderLabels(headers);
+        ui->directoryListWidget->setColumnCount(2);
+
+        ui->directoryListWidget->header()->setSectionResizeMode(0, QHeaderView::Stretch);          // "Directory"
+        ui->directoryListWidget->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents); // "Recursive"
     }
 }
 
@@ -299,4 +325,96 @@ void MainWindow::onNewDbClicked()
 void MainWindow::setCurrentDatabase(QString const& path)
 {
     ui->currentDbLineEdit->setText(path);
+}
+
+std::vector<DirectoryEntry> MainWindow::getDirectorySettings() const
+{
+    std::vector<DirectoryEntry> dirs;
+
+    for (int i = 0; i < ui->directoryListWidget->topLevelItemCount(); ++i) {
+        auto* item = ui->directoryListWidget->topLevelItem(i);
+        QString path = item->text(0);
+        bool recursive = item->checkState(1) == Qt::Checked;
+        dirs.push_back({ path.toStdString(), recursive });
+    }
+
+    return dirs;
+}
+
+SearchSettings MainWindow::collectSearchSettings() const
+{
+    SearchSettings s;
+
+    s.useGlob = ui->globCheckBox->isChecked();
+    s.caseInsensitive = ui->caseCheckBox->isChecked();
+
+    // file extensions
+    QString const extText = ui->extensionsEdit->text().trimmed();
+    if (!extText.isEmpty()) {
+        for (QString ext : extText.split(',', Qt::SkipEmptyParts)) {
+            ext = ext.trimmed().toLower();
+            if (!ext.startsWith('.'))
+                ext.prepend('.');
+            s.extensions.insert(ext.toStdString());
+        }
+    }
+
+    // regex lists
+    auto splitLines = [](QString const& txt) {
+        QStringList ls = txt.split('\n', Qt::SkipEmptyParts);
+        for (auto& l : ls)
+            l = l.trimmed();
+        return ls;
+    };
+    for (QString const& p : splitLines(ui->includeFileEdit->toPlainText()))
+        s.includeFilePatterns.push_back(p.toStdString());
+    for (QString const& p : splitLines(ui->includeDirEdit->toPlainText()))
+        s.includeDirPatterns.push_back(p.toStdString());
+    for (QString const& p : splitLines(ui->excludeFileEdit->toPlainText()))
+        s.excludeFilePatterns.push_back(p.toStdString());
+    for (QString const& p : splitLines(ui->excludeDirEdit->toPlainText()))
+        s.excludeDirPatterns.push_back(p.toStdString());
+
+    // size limits
+    if (ui->minBytesSpin->value() > 0)
+        s.minBytes = static_cast<std::uint64_t>(ui->minBytesSpin->value());
+    if (ui->maxBytesSpin->value() > 0)
+        s.maxBytes = static_cast<std::uint64_t>(ui->maxBytesSpin->value());
+
+    // directories
+    s.directories = getDirectorySettings();
+    compileAllRegexes(s);
+
+    return s;
+}
+void MainWindow::onValidatePatternsClicked()
+{
+    // build a *temporary* settings object from the form
+    SearchSettings s;
+    s.useGlob = ui->globCheckBox->isChecked();
+    s.caseInsensitive = ui->caseCheckBox->isChecked();
+
+    auto collect = [](QPlainTextEdit* w) {
+        std::vector<std::string> v;
+        for (auto& ln : w->toPlainText().split('\n', Qt::SkipEmptyParts))
+            v.emplace_back(ln.trimmed().toStdString());
+        return v;
+    };
+    s.includeFilePatterns = collect(ui->includeFileEdit);
+    s.includeDirPatterns = collect(ui->includeDirEdit);
+    s.excludeFilePatterns = collect(ui->excludeFileEdit);
+    s.excludeDirPatterns = collect(ui->excludeDirEdit);
+
+    auto const errs = compileAllRegexes(s);
+
+    if (errs.empty()) {
+        QMessageBox::information(this, tr("Pattern check"),
+            tr("✅  All patterns compiled successfully."));
+    } else {
+        QString msg = tr("The following patterns failed:\n• %1")
+                          .arg(QString::fromStdString(std::accumulate(
+                              std::next(errs.begin()), errs.end(), errs.front(),
+                              [](std::string a, std::string const& b) { return a + "\n• " + b; })));
+        QMessageBox::critical(this, tr("Pattern errors"), msg);
+    }
 }

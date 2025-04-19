@@ -36,8 +36,12 @@ find_package(spdlog REQUIRED)
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
 qt_standard_project_setup()
 
-
 add_subdirectory(vendor/phash)
 add_subdirectory(vendor/hftrie)
 add_subdirectory(src)
 
+add_library(nlohmann_json INTERFACE)
+target_include_directories(nlohmann_json
+    INTERFACE
+    ${CMAKE_SOURCE_DIR}/vendor/nlohmann_json/single_include
+)

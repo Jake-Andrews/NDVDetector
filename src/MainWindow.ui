@@ -13,10 +13,8 @@
   </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout">
-    <!-- Tab widget to hold Main view and Settings -->
     <item>
      <widget class="QTabWidget" name="tabWidget">
-      
       <!-- Videos Tab -->
       <widget class="QWidget" name="videosTab">
        <layout class="QVBoxLayout" name="videosLayout">
@@ -28,27 +26,29 @@
             <property name="text"><string>▼ Search Directories</string></property>
             <property name="checkable"><bool>true</bool></property>
             <property name="checked"><bool>true</bool></property>
-            <property name="toolButtonStyle">
-             <enum>Qt::ToolButtonTextBesideIcon</enum>
-            </property>
+            <property name="toolButtonStyle"><enum>Qt::ToolButtonTextBesideIcon</enum></property>
            </widget>
           </item>
           <item>
            <widget class="QFrame" name="directoryPanel">
-            <property name="frameShape">
-             <enum>QFrame::StyledPanel</enum>
-            </property>
+            <property name="frameShape"><enum>QFrame::StyledPanel</enum></property>
             <layout class="QVBoxLayout" name="directoryPanelLayout">
              <item>
-              <widget class="QListWidget" name="directoryListWidget"/>
+              <widget class="QTreeWidget" name="directoryListWidget">
+               <column>
+                <property name="text"><string>Directory</string></property>
+               </column>
+               <column>
+                <property name="text"><string>Recursive</string></property>
+               </column>
+               <property name="columnCount"><number>2</number></property>
+              </widget>
              </item>
              <item>
               <layout class="QHBoxLayout" name="horizontalLayoutDirActions">
                <item>
                 <widget class="QLineEdit" name="directoryLineEdit">
-                 <property name="placeholderText">
-                  <string>Enter directory path manually...</string>
-                 </property>
+                 <property name="placeholderText"><string>Enter directory path manually...</string></property>
                 </widget>
                </item>
                <item>
@@ -73,145 +73,224 @@
           </item>
          </layout>
         </item>
-
         <!-- Table view -->
         <item>
          <widget class="QTableView" name="tableView">
           <property name="sortingEnabled"><bool>true</bool></property>
          </widget>
         </item>
-
         <!-- Bottom buttons -->
         <item>
          <layout class="QHBoxLayout" name="bottomButtonsLayout">
           <item>
            <widget class="QPushButton" name="searchButton">
             <property name="text"><string>Search</string></property>
-            <property name="minimumSize">
-             <size><width>100</width><height>40</height></size>
-            </property>
+            <property name="minimumSize"><size><width>100</width><height>40</height></size></property>
            </widget>
           </item>
           <item>
            <widget class="QPushButton" name="selectButton">
             <property name="text"><string>Select</string></property>
-            <property name="minimumSize">
-             <size><width>100</width><height>40</height></size>
-            </property>
+            <property name="minimumSize"><size><width>100</width><height>40</height></size></property>
            </widget>
           </item>
           <item>
            <widget class="QPushButton" name="sortButton">
             <property name="text"><string>Sort</string></property>
-            <property name="minimumSize">
-             <size><width>100</width><height>40</height></size>
-            </property>
+            <property name="minimumSize"><size><width>100</width><height>40</height></size></property>
            </widget>
           </item>
           <item>
            <widget class="QPushButton" name="sortGroupsButton">
             <property name="text"><string>Sort Groups</string></property>
-            <property name="minimumSize">
-             <size><width>100</width><height>40</height></size>
-            </property>
+            <property name="minimumSize"><size><width>100</width><height>40</height></size></property>
            </widget>
           </item>
           <item>
            <widget class="QPushButton" name="deleteButton">
             <property name="text"><string>Delete</string></property>
-            <property name="minimumSize">
-             <size><width>100</width><height>40</height></size>
-            </property>
+            <property name="minimumSize"><size><width>100</width><height>40</height></size></property>
            </widget>
           </item>
           <item>
            <widget class="QPushButton" name="hardlinkButton">
             <property name="text"><string>Hardlink</string></property>
-            <property name="minimumSize">
-             <size><width>100</width><height>40</height></size>
-            </property>
-            <property name="toolTip">
-             <string>This will hardlink all selected videos to the first video in each group. Requires 2 or more selected videos per group.</string>
-            </property>
+            <property name="minimumSize"><size><width>100</width><height>40</height></size></property>
+            <property name="toolTip"><string>This will hardlink all selected videos to the first video in each group. Requires 2 or more selected videos per group.</string></property>
            </widget>
           </item>
           <item>
            <spacer name="horizontalSpacer">
-            <property name="orientation">
-             <enum>Qt::Horizontal</enum>
-            </property>
-            <property name="sizeType">
-             <enum>QSizePolicy::Expanding</enum>
-            </property>
+            <property name="orientation"><enum>Qt::Horizontal</enum></property>
+            <property name="sizeType"><enum>QSizePolicy::Expanding</enum></property>
            </spacer>
           </item>
          </layout>
         </item>
        </layout>
       </widget>
-      <attribute name="tabText">
-       <string>Videos</string>
-      </attribute>
+      <attribute name="tabText"><string>Videos</string></attribute>
 
       <!-- Settings Tab -->
       <widget class="QWidget" name="settingsTab">
        <layout class="QVBoxLayout" name="settingsLayout">
         <item>
-         <widget class="QGroupBox" name="displaySettingsGroup">
-          <property name="title">
-           <string>Display Options</string>
-          </property>
-          <layout class="QVBoxLayout" name="displaySettingsLayout">
-            <!-- show current DB file path -->
-            <item>
-              <layout class="QHBoxLayout" name="dbStatusLayout">
-                <item>
-                  <widget class="QLabel" name="currentDbLabel">
-                    <property name="text">
-                      <string>Current DB:</string>
-                    </property>
-                  </widget>
-                </item>
-                <item>
-                  <widget class="QLineEdit" name="currentDbLineEdit">
-                    <property name="readOnly"><bool>true</bool></property>
-                  </widget>
-                </item>
-              </layout>
-            </item>
-            <item>
-            <!-- load DB button -->
-             <widget class="QPushButton" name="loadDbButton">
-              <property name="text"><string>Open Database…</string></property>
-             </widget>
-            </item>
-            <item>
-            <!-- new DB button -->
-             <widget class="QPushButton" name="newDbButton">
-              <property name="text">
-               <string>New Database…</string>
-              </property>
-             </widget>
-            </item>
+         <widget class="QGroupBox" name="filtersGroup">
+          <property name="title"><string>Search Filters</string></property>
+          <layout class="QFormLayout" name="filtersLayout">
+           <!-- regex help row -->
+           <item row="0" column="0" colspan="3">
+            <widget class="QToolButton" name="regexHelpButton">
+             <property name="text"><string>Regex ?</string></property>
+             <property name="toolTip"><string>
+              &lt;qt&gt;
+              &lt;b&gt;Regex Syntax&lt;/b&gt;&lt;br/&gt;
+              This application uses the C++ Standard Library Regular Expressions (std::regex).&lt;br/&gt;
+              The syntax is based on ECMAScript (similar to JavaScript).&lt;br/&gt;&lt;br/&gt;
+              Examples:&lt;br/&gt;
+              • ^video - matches any string that starts with "video"&lt;br/&gt;
+              • .mp4$ - matches any string ending with ".mp4"&lt;br/&gt;
+              • (dog|cat) - matches either "dog" or "cat"&lt;/qt&gt;
+              &lt;br/&gt;
+              &lt;br/&gt;
+
+              &lt;b&gt;Glob Syntax&lt;/b&gt;&lt;br/&gt;
+              If you enable &quot;Patterns are globs&quot;, file and directory filters will use shell-style wildcards instead of regex.&lt;br/&gt;&lt;br/&gt;
+              Examples:&lt;br/&gt;
+              &amp;bull; &lt;code&gt;*.mp4&lt;/code&gt; – matches all files ending in &quot;.mp4&quot;&lt;br/&gt;
+              &amp;bull; &lt;code&gt;video*&lt;/code&gt; – matches files that start with &quot;video&quot;&lt;br/&gt;
+              &amp;bull; &lt;code&gt;*dog*.*&lt;/code&gt; – matches anything with &quot;dog&quot; in the name&lt;br/&gt;&lt;br/&gt;
+
+              &lt;qt&gt;
+              &lt;b&gt;If any include filter is defined:&lt;/b&gt;&lt;br/&gt;
+              &amp;bull; Only include files that match an include regex.&lt;br/&gt;
+              &amp;bull; Exclude filters are ignored.&lt;br/&gt;&lt;br/&gt;
+              &lt;b&gt;If no include filters are defined:&lt;/b&gt;&lt;br/&gt;
+              &amp;bull; Match everything except what's excluded.
+              &lt;/qt&gt;
+
+             </string></property>
+             <property name="autoRaise"><bool>true</bool></property>
+            </widget>
+           </item>
+           <item row="1" column="0">
+            <widget class="QLabel" name="includeFileLabel">
+             <property name="text"><string>Include File Regex (one per line)</string></property>
+            </widget>
+           </item>
+           <item row="1" column="1">
+            <widget class="QPlainTextEdit" name="includeFileEdit"/>
+           </item>
+           <item row="2" column="0">
+            <widget class="QLabel" name="includeDirLabel">
+             <property name="text"><string>Include Dir Regex</string></property>
+            </widget>
+           </item>
+           <item row="2" column="1">
+            <widget class="QPlainTextEdit" name="includeDirEdit"/>
+           </item>
+           <item row="3" column="0">
+            <widget class="QLabel" name="excludeFileLabel">
+             <property name="text"><string>Exclude File Regex</string></property>
+            </widget>
+           </item>
+           <item row="3" column="1">
+            <widget class="QPlainTextEdit" name="excludeFileEdit"/>
+           </item>
+           <item row="4" column="0">
+            <widget class="QLabel" name="excludeDirLabel">
+             <property name="text"><string>Exclude Dir Regex</string></property>
+            </widget>
+           </item>
+           <item row="4" column="1">
+            <widget class="QPlainTextEdit" name="excludeDirEdit"/>
+           </item>
+           <item row="5" column="0">
+            <widget class="QLabel" name="minBytesLabel">
+             <property name="text"><string>Min Bytes (0 = none)</string></property>
+            </widget>
+           </item>
+           <item row="5" column="1">
+            <widget class="QSpinBox" name="minBytesSpin">
+             <property name="maximum"><number>9223372036854775807</number></property>
+             <property name="suffix"><string> bytes</string></property>
+            </widget>
+           </item>
+           <item row="6" column="0">
+            <widget class="QLabel" name="maxBytesLabel">
+             <property name="text"><string>Max Bytes (0 = none)</string></property>
+            </widget>
+           </item>
+           <item row="6" column="1">
+            <widget class="QSpinBox" name="maxBytesSpin">
+             <property name="maximum"><number>9223372036854775807</number></property>
+             <property name="suffix"><string> bytes</string></property>
+            </widget>
+           </item>
+           <item row="7" column="0">
+            <widget class="QLabel" name="extLabel">
+             <property name="text"><string>Extensions (comma-separated, “.mp4,.mkv” … empty = all)</string></property>
+            </widget>
+           </item>
+           <item row="7" column="1">
+            <widget class="QLineEdit" name="extensionsEdit"/>
+           </item>
+           <item row="8" column="0">
+            <widget class="QCheckBox" name="globCheckBox">
+             <property name="text"><string>Patterns are globs</string></property>
+            </widget>
+           </item>
+           <item row="8" column="1">
+            <widget class="QCheckBox" name="caseCheckBox">
+             <property name="text"><string>Case-insensitive</string></property>
+            </widget>
+           </item>
+           <item row="9" column="1">
+            <widget class="QPushButton" name="validatePatternsButton">
+             <property name="text"><string>Validate patterns…</string></property>
+            </widget>
+           </item>
+           <item row="10" column="1">
+            <widget class="QPushButton" name="regexTesterButton">
+             <property name="text"><string>Sandbox to test patterns…</string></property>
+            </widget>
+           </item>
           </layout>
          </widget>
         </item>
         <item>
+         <layout class="QHBoxLayout" name="dbStatusLayout">
+          <item>
+           <widget class="QLabel" name="currentDbLabel">
+            <property name="text"><string>Current DB:</string></property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLineEdit" name="currentDbLineEdit">
+            <property name="readOnly"><bool>true</bool></property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <widget class="QPushButton" name="loadDbButton">
+          <property name="text"><string>Open Database…</string></property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="newDbButton">
+          <property name="text"><string>New Database…</string></property>
+         </widget>
+        </item>
+        <item>
          <spacer name="verticalSpacer">
-          <property name="orientation">
-           <enum>Qt::Vertical</enum>
-          </property>
-          <property name="sizeType">
-           <enum>QSizePolicy::Expanding</enum>
-          </property>
+          <property name="orientation"><enum>Qt::Vertical</enum></property>
+          <property name="sizeType"><enum>QSizePolicy::Expanding</enum></property>
          </spacer>
         </item>
        </layout>
       </widget>
-      <attribute name="tabText">
-       <string>Settings</string>
-      </attribute>
-
+      <attribute name="tabText"><string>Settings</string></attribute>
      </widget>
     </item>
    </layout>
@@ -222,4 +301,3 @@
  <resources/>
  <connections/>
 </ui>
-

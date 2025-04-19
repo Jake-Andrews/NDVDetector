@@ -2,6 +2,7 @@
 
 #include "DatabaseManager.h"
 #include "VideoInfo.h"
+#include "SearchSettings.h"
 #include <QObject>
 #include <QString>
 #include <vector>
@@ -10,7 +11,7 @@ class SearchWorker : public QObject {
     Q_OBJECT
 
 public:
-    explicit SearchWorker(DatabaseManager& db, QStringList directories, QObject* parent = nullptr);
+    explicit SearchWorker(DatabaseManager& db, SearchSettings cfg, QObject* parent = nullptr);
     void process();
 
 signals:
@@ -21,7 +22,7 @@ signals:
 
 private:
     DatabaseManager& m_db;
-    QStringList m_directories;
+    SearchSettings m_cfg; 
 
     void doExtractionAndDetection(std::vector<VideoInfo>& videos);
 };

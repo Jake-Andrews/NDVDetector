@@ -7,10 +7,10 @@
 #include <filesystem>
 #include <unordered_set>
 
-SearchWorker::SearchWorker(DatabaseManager& db, QStringList directories, QObject* parent)
+SearchWorker::SearchWorker(DatabaseManager& db, SearchSettings cfg, QObject* parent)
     : QObject(parent)
     , m_db(db)
-    , m_directories(std::move(directories))
+    , m_cfg(std::move(cfg))
 {
 }
 
@@ -21,15 +21,17 @@ void SearchWorker::process()
     try {
         std::vector<VideoInfo> allVideos;
 
-        for (QString const& dir : m_directories) {
-            std::filesystem::path path(dir.toStdString());
+        for (auto const& dir : m_cfg.directories) {
+            std::filesystem::path path(dir.path);
 
             if (!std::filesystem::exists(path) || !std::filesystem::is_directory(path)) {
-                emit error(QString("Directory not valid or accessible: %1").arg(dir));
+                emit error(
+                    tr("Directory not valid or accessible: %1")
+                        .arg(QString::fromStdString(dir.path)));
                 continue;
             }
 
-            auto vids = getVideosFromPath(path, { ".mp4", ".webm", ".mkv" });
+            auto vids = getVideosFromPath(dir.path, m_cfg);
             allVideos.insert(allVideos.end(), vids.begin(), vids.end());
         }
 

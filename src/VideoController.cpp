@@ -16,9 +16,9 @@ VideoController::VideoController(DatabaseManager& db, QObject* parent)
 {
 }
 
-void VideoController::startSearchAndDetection()
+void VideoController::startSearch(SearchSettings const& cfg)
 {
-    if (m_directories.isEmpty()) {
+    if (m_cfg.directories.empty()) {
         emit errorOccurred("No directories specified. Please add at least one directory.");
         return;
     }
@@ -35,14 +35,12 @@ void VideoController::startSearchAndDetection()
     progressDialog->setAutoReset(false);
     progressDialog->show();
 
-    // Create worker and thread
     QThread* thread = new QThread(this); // parent is this, so it cleans up
-    SearchWorker* worker = new SearchWorker(m_db, m_directories);
+    SearchWorker* worker = new SearchWorker(m_db, m_cfg);
     worker->moveToThread(thread);
 
     // Connect signals/slots
     connect(thread, &QThread::started, worker, &SearchWorker::process);
-
     // Update UI with # files found
     connect(worker, &SearchWorker::filesFound, progressDialog, [progressDialog](int count) {
         progressDialog->setLabelText(QString("Found %1 videos.\nScanning metadata...").arg(count));
@@ -97,18 +95,35 @@ void VideoController::onAddDirectoryRequested(QString const& path)
         return;
     }
 
-    if (!m_directories.contains(path)) {
-        m_directories << path;
-        emit directoryListUpdated(m_directories);
+    auto it = std::find_if(m_cfg.directories.begin(), m_cfg.directories.end(), [&](DirectoryEntry const& e) {
+        return e.path == path.toStdString();
+    });
+
+    if (it == m_cfg.directories.end()) {
+        m_cfg.directories.push_back({ path.toStdString(), true });
     }
+
+    QStringList dirList;
+    for (auto const& d : m_cfg.directories) {
+        dirList << QString::fromStdString(d.path);
+    }
+    emit directoryListUpdated(dirList);
 }
 
 void VideoController::onRemoveSelectedDirectoriesRequested(QStringList const& dirs)
 {
     for (auto const& d : dirs) {
-        m_directories.removeAll(d);
+        auto it = std::remove_if(m_cfg.directories.begin(), m_cfg.directories.end(), [&](DirectoryEntry const& e) {
+            return e.path == d.toStdString();
+        });
+        m_cfg.directories.erase(it, m_cfg.directories.end());
     }
-    emit directoryListUpdated(m_directories);
+
+    QStringList dirList;
+    for (auto const& d : m_cfg.directories) {
+        dirList << QString::fromStdString(d.path);
+    }
+    emit directoryListUpdated(dirList);
 }
 
 void VideoController::handleSelectOption(MainWindow::SelectOptions option)
@@ -312,4 +327,9 @@ void VideoController::createDatabase(QString const& path)
         m_model->setGroupedVideos({});
 
     emit databaseOpened(path);
+}
+
+void VideoController::setSearchSettings(SearchSettings const& cfg)
+{
+    m_cfg = cfg;
 }

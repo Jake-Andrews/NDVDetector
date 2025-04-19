@@ -11,6 +11,7 @@
 #include "MainWindow.h"
 #include "VideoInfo.h"
 #include "DatabaseManager.h"
+#include "SearchSettings.h"
 
 class SearchProgressDialog; 
 class VideoModel;
@@ -23,9 +24,10 @@ public:
     explicit VideoController(DatabaseManager& db, QObject* parent = nullptr);
 
     void setModel(VideoModel* model);
+    void setSearchSettings(const SearchSettings& cfg); 
 
 public slots: 
-    void startSearchAndDetection();
+    void startSearch(const SearchSettings& cfg);
 
     void onAddDirectoryRequested(const QString& path);
     void onRemoveSelectedDirectoriesRequested(const QStringList& dirs);
@@ -56,7 +58,7 @@ private:
     VideoModel* m_model = nullptr;
     std::vector<std::vector<VideoInfo>> m_currentGroups;
 
-    QStringList m_directories;
+    SearchSettings m_cfg; 
 
     QPointer<SearchProgressDialog> m_progressDialog;
     QFutureWatcher<void> m_searchWatcher;

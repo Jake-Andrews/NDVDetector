@@ -37,10 +37,10 @@ int main(int argc, char* argv[])
 
     w.setCurrentDatabase(QString::fromUtf8("videos.db"));
 
-    QObject::connect(&w, &MainWindow::searchTriggered,
-        [&] {
-            controller.startSearchAndDetection();
-        });
+    QObject::connect(&w, &MainWindow::searchRequested, [&controller](SearchSettings cfg) {
+        controller.setSearchSettings(cfg);
+        controller.startSearch(cfg);
+    });
 
     QObject::connect(&w, &MainWindow::selectOptionChosen,
         [&](MainWindow::SelectOptions option) {

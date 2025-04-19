@@ -1,5 +1,6 @@
 #include "DatabaseManager.h"
 #include "Hash.h"
+#include "SearchSettings.h"
 #include "VideoInfo.h"
 
 #include <memory>
@@ -11,7 +12,6 @@ namespace {
 
 using SqliteStmtPtr = std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)>;
 
-// Prepare a statement or throw
 SqliteStmtPtr prepareStatement(sqlite3* db, std::string const& sql)
 {
     sqlite3_stmt* stmt = nullptr;
@@ -23,7 +23,6 @@ SqliteStmtPtr prepareStatement(sqlite3* db, std::string const& sql)
     return SqliteStmtPtr(stmt, &sqlite3_finalize);
 }
 
-// Check return code (for bind/step), log & throw on error
 void checkRc(int rc, sqlite3* db, std::string const& context)
 {
     if (rc != SQLITE_OK && rc != SQLITE_DONE) {
@@ -466,10 +465,18 @@ void DatabaseManager::initDatabase()
         );
     )";
 
+    static constexpr auto createSettingsTableSQL = R"(
+        CREATE TABLE IF NOT EXISTS app_settings (
+            id       INTEGER PRIMARY KEY CHECK (id = 1),
+            json_blob TEXT NOT NULL
+        );
+    )";
+
     execStatement(createVideoTableSQL);
     execStatement(createHashTableSQL);
     execStatement(createDupGroupTable);
     execStatement(createDupGroupMapTable);
+    execStatement(createSettingsTableSQL);
 }
 
 void DatabaseManager::execStatement(std::string const& sql)
@@ -497,4 +504,28 @@ void DatabaseManager::commit()
 void DatabaseManager::beginTransaction()
 {
     execStatement("BEGIN TRANSACTION;");
+}
+
+SearchSettings DatabaseManager::loadSettings() const
+{
+    static constexpr auto sql = "SELECT json_blob FROM app_settings WHERE id=1;";
+    auto stmt = prepareStatement(m_db, sql);
+    if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+        auto* txt = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 0));
+        if (txt) {
+            return nlohmann::json::parse(txt).get<SearchSettings>();
+        }
+    }
+    return {};
+}
+
+void DatabaseManager::saveSettings(SearchSettings const& s)
+{
+    nlohmann::json j = s;
+    std::string blob = j.dump();
+    static constexpr auto sql = "REPLACE INTO app_settings (id, json_blob) VALUES (1, ?);";
+    auto stmt = prepareStatement(m_db, sql);
+    checkRc(sqlite3_bind_text(stmt.get(), 1, blob.c_str(), -1, SQLITE_TRANSIENT),
+        m_db, "bind settings json");
+    checkRc(sqlite3_step(stmt.get()), m_db, "save settings");
 }

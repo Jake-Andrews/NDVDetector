@@ -17,6 +17,7 @@ target_link_libraries(NDVDetector PRIVATE
     hftrie
     Qt6::Widgets
     spdlog::spdlog
+    nlohmann_json
 )
 
 qt_finalize_executable(NDVDetector)

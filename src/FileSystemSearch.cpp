@@ -1,9 +1,13 @@
 #include "FileSystemSearch.h"
+#include "SearchSettings.h"
 #include "VideoInfo.h"
 
+#include <cctype>
 #include <chrono>
 #include <filesystem>
 #include <iostream>
+#include <regex>
+#include <spdlog/spdlog.h>
 #include <string>
 #include <system_error>
 #include <unordered_set>
@@ -58,72 +62,174 @@ bool get_file_identity(const std::filesystem::path&, long&, long&, int&)
 
 } // namespace
 
-std::vector<VideoInfo> getVideosFromPath(std::filesystem::path const& root,
-    std::unordered_set<std::string> const& extensions)
+static bool matchAny(std::string const& text,
+    std::vector<std::regex> const& vec)
 {
-    std::vector<VideoInfo> results;
+    return std::any_of(vec.begin(), vec.end(),
+        [&](auto const& rx) { return std::regex_search(text, rx); });
+}
+
+std::vector<VideoInfo>
+getVideosFromPath(std::filesystem::path const& root, SearchSettings const& cfg)
+{
+    std::vector<VideoInfo> out;
     std::error_code ec;
 
     if (!std::filesystem::exists(root, ec) || !std::filesystem::is_directory(root, ec)) {
-        return results;
+        spdlog::warn("Invalid root path: {}", root.string());
+        return out;
     }
 
-    for (auto it = std::filesystem::recursive_directory_iterator(root, std::filesystem::directory_options::skip_permission_denied, ec);
-        it != std::filesystem::recursive_directory_iterator();
-        it.increment(ec)) {
+    // Log effective search filters
+    spdlog::info("Searching path: {}", root.string());
+    spdlog::info("  Recursive: {}", std::ranges::any_of(cfg.directories, [&](auto const& d) {
+        return d.path == root.lexically_normal().string() && d.recursive;
+    })
+            ? "true"
+            : "false");
 
-        if (ec) {
-            std::cerr << "[Warning] Skipping due to error: " << ec.message() << "\n";
-            continue;
+    spdlog::info("  Extensions:");
+    for (auto const& ext : cfg.extensions)
+        spdlog::info("    - {}", ext);
+
+    spdlog::info("  Include File Patterns:");
+    for (auto const& r : cfg.includeFilePatterns)
+        spdlog::info("    - {}", r);
+
+    spdlog::info("  Include Dir Patterns:");
+    for (auto const& r : cfg.includeDirPatterns)
+        spdlog::info("    - {}", r);
+
+    spdlog::info("  Exclude File Patterns:");
+    for (auto const& r : cfg.excludeFilePatterns)
+        spdlog::info("    - {}", r);
+
+    spdlog::info("  Exclude Dir Patterns:");
+    for (auto const& r : cfg.excludeDirPatterns)
+        spdlog::info("    - {}", r);
+
+    spdlog::info("  MinBytes: {}", cfg.minBytes ? std::to_string(*cfg.minBytes) : "None");
+    spdlog::info("  MaxBytes: {}", cfg.maxBytes ? std::to_string(*cfg.maxBytes) : "None");
+
+    // Determine if this root path is marked recursive
+    bool recurse = true;
+    for (auto const& d : cfg.directories) {
+        if (d.path == root.lexically_normal().string()) {
+            recurse = d.recursive;
+            break;
+        }
+    }
+
+    auto dopt = std::filesystem::directory_options::skip_permission_denied;
+
+    auto processEntry = [&](std::filesystem::directory_entry const& entry) {
+        if (!entry.is_regular_file())
+            return;
+
+        auto const& path = entry.path();
+        std::string fname = path.filename().string();
+        std::string dir = path.parent_path().string();
+
+        // --- extension test ---
+        std::string ext = path.extension().string();
+        std::ranges::transform(ext, ext.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+
+        if (!cfg.extensions.empty() && !cfg.extensions.contains(ext))
+            return;
+
+        // --- size test ---
+        std::error_code szErr;
+        auto sz = std::filesystem::file_size(path, szErr);
+        if (szErr)
+            return;
+
+        if (cfg.minBytes && sz < *cfg.minBytes)
+            return;
+        if (cfg.maxBytes && sz > *cfg.maxBytes)
+            return;
+
+        bool incF = matchAny(fname, cfg.includeFileRx);
+        bool incD = matchAny(dir, cfg.includeDirRx);
+        bool excF = matchAny(fname, cfg.excludeFileRx);
+        bool excD = matchAny(dir, cfg.excludeDirRx);
+
+        bool hasInclude = !cfg.includeFileRx.empty() || !cfg.includeDirRx.empty();
+
+        bool accept = false;
+        if (hasInclude) {
+            // Include filters override everything — exclude filters ignored
+            accept = incF || incD;
+        } else {
+            // No include filters — exclude filters apply
+            accept = !(excF || excD);
         }
 
-        if (std::filesystem::is_regular_file(*it, ec)) {
-            auto ext = it->path().extension().string();
-            if (!ext.empty() && extensions.contains(ext)) {
-                std::filesystem::path absPath = std::filesystem::absolute(it->path(), ec).lexically_normal();
-                if (ec) {
-                    std::cerr << "[Warning] Failed to get absolute path: " << ec.message() << "\n";
-                    continue;
-                }
+        if (!accept) {
+            spdlog::debug("Filtered: {}", path.string());
+            return;
+        }
 
-                VideoInfo video;
-                video.path = absPath.string();
+        VideoInfo video;
+        std::error_code absErr;
+        auto absPath = std::filesystem::absolute(path, absErr);
+        if (absErr)
+            return;
 
-                auto ftime = std::filesystem::last_write_time(absPath, ec);
-                if (!ec) {
-                    auto fileTimePoint = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-                        ftime - decltype(ftime)::clock::now() + std::chrono::system_clock::now());
-                    auto sctp = std::chrono::system_clock::to_time_t(fileTimePoint);
-                    video.modified_at = std::to_string(sctp);
-                }
+        video.path = absPath.lexically_normal().string();
 
-                video.created_at = "";
-                video.size = static_cast<int>(std::filesystem::file_size(absPath, ec));
-                if (ec) {
-                    video.size = 0;
-                }
+        std::error_code timeErr;
+        auto ftime = std::filesystem::last_write_time(absPath, timeErr);
+        if (!timeErr) {
+            auto fileTimePoint = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                ftime - decltype(ftime)::clock::now() + std::chrono::system_clock::now());
+            std::time_t sctp = std::chrono::system_clock::to_time_t(fileTimePoint);
+            video.modified_at = std::to_string(sctp);
+        } else {
+            video.modified_at = "";
+        }
 
-                video.video_codec.clear();
-                video.audio_codec.clear();
-                video.width = 0;
-                video.height = 0;
-                video.duration = 0;
-                video.bit_rate = 0;
-                video.sample_rate_avg = 0;
-                video.avg_frame_rate = 0.0;
+        video.created_at = "";
+        video.size = static_cast<int>(sz);
+        video.video_codec.clear();
+        video.audio_codec.clear();
+        video.width = 0;
+        video.height = 0;
+        video.duration = 0;
+        video.bit_rate = 0;
+        video.sample_rate_avg = 0;
+        video.avg_frame_rate = 0.0;
 
-                if (!get_file_identity(absPath, video.inode, video.device, video.num_hard_links)) {
-                    video.inode = -1;
-                    video.device = -1;
-                    video.num_hard_links = 1;
-                }
+        if (!get_file_identity(absPath, video.inode, video.device, video.num_hard_links)) {
+            video.inode = -1;
+            video.device = -1;
+            video.num_hard_links = 1;
+        }
 
-                results.push_back(std::move(video));
+        spdlog::debug("Accepted: {}", video.path);
+        out.push_back(std::move(video));
+    };
+
+    if (recurse) {
+        for (auto const& entry : std::filesystem::recursive_directory_iterator(root, dopt, ec)) {
+            if (ec) {
+                spdlog::warn("Recursive iterator error: {}", ec.message());
+                continue;
             }
+            processEntry(entry);
+        }
+    } else {
+        for (auto const& entry : std::filesystem::directory_iterator(root, dopt, ec)) {
+            if (ec) {
+                spdlog::warn("Directory iterator error: {}", ec.message());
+                continue;
+            }
+            processEntry(entry);
         }
     }
 
-    return results;
+    return out;
 }
 
 bool validate_directory(std::filesystem::path const& root)
