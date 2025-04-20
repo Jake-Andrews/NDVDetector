@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <iostream>
 #include <optional>
+#include <spdlog/spdlog.h>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -29,27 +30,36 @@ open_format_context(std::string const& file_path)
 bool extract_info(VideoInfo& out)
 {
     if (!std::filesystem::exists(out.path)) {
-        std::cerr << "[FFmpeg] Error: File does not exist: " << out.path << '\n';
+        spdlog::error("[FFmpeg] File does not exist: {}", out.path);
         return false;
     }
 
     auto formatCtxOpt = open_format_context(out.path);
-    if (!formatCtxOpt)
+    if (!formatCtxOpt) {
+        spdlog::error("[FFmpeg] Failed to open format context for: {}", out.path);
         return false;
+    }
 
     if (avformat_find_stream_info(formatCtxOpt->get(), nullptr) < 0) {
-        std::cerr << "[FFmpeg] Error: Failed to find stream info for file: " << out.path << '\n';
+        spdlog::error("[FFmpeg] Failed to find stream info for: {}", out.path);
+        return false;
+    }
+
+    if (formatCtxOpt->get()->duration <= 0) {
+        spdlog::error("[FFmpeg] Invalid or missing duration for file: {}", out.path);
         return false;
     }
 
     out.duration = static_cast<int>(formatCtxOpt->get()->duration / AV_TIME_BASE);
-    out.size = static_cast<int>(std::filesystem::file_size(out.path));
+    out.size = static_cast<int64_t>(std::filesystem::file_size(out.path));
     out.bit_rate = static_cast<int>(formatCtxOpt->get()->bit_rate);
+
+    bool has_video_stream = false;
 
     for (unsigned i = 0; i < formatCtxOpt->get()->nb_streams; ++i) {
         auto* stream = formatCtxOpt->get()->streams[i];
         if (!stream || !stream->codecpar) {
-            std::cerr << "[FFmpeg] Warning: Invalid stream " << i << " in file: " << out.path << '\n';
+            spdlog::warn("[FFmpeg] Skipping invalid stream {} in file: {}", i, out.path);
             continue;
         }
 
@@ -58,17 +68,22 @@ bool extract_info(VideoInfo& out)
         std::string codecName = codec ? codec->name : "unknown";
 
         if (params->codec_type == AVMEDIA_TYPE_VIDEO) {
+            has_video_stream = true;
             out.video_codec = codecName;
             out.width = params->width;
             out.height = params->height;
 
             auto r = stream->avg_frame_rate;
             out.avg_frame_rate = r.den > 0 ? static_cast<double>(r.num) / r.den : 0.0;
-
         } else if (params->codec_type == AVMEDIA_TYPE_AUDIO) {
             out.audio_codec = codecName;
             out.sample_rate_avg = params->sample_rate;
         }
+    }
+
+    if (!has_video_stream || out.width <= 0 || out.height <= 0) {
+        spdlog::error("[FFmpeg] No valid video stream in file: {}", out.path);
+        return false;
     }
 
     return true;

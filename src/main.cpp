@@ -1,5 +1,6 @@
 #include "DatabaseManager.h"
 #include "MainWindow.h"
+#include "SearchSettings.h"
 #include "VideoController.h"
 
 #include <QApplication>
@@ -39,7 +40,7 @@ int main(int argc, char* argv[])
 
     QObject::connect(&w, &MainWindow::searchRequested, [&controller](SearchSettings cfg) {
         controller.setSearchSettings(cfg);
-        controller.startSearch(cfg);
+        controller.startSearch();
     });
 
     QObject::connect(&w, &MainWindow::selectOptionChosen,

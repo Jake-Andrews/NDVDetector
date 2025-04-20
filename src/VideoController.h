@@ -27,7 +27,7 @@ public:
     void setSearchSettings(const SearchSettings& cfg); 
 
 public slots: 
-    void startSearch(const SearchSettings& cfg);
+    void startSearch();
 
     void onAddDirectoryRequested(const QString& path);
     void onRemoveSelectedDirectoriesRequested(const QStringList& dirs);

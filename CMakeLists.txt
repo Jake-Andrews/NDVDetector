@@ -19,6 +19,7 @@ set(WITH_AUDIO_HASH OFF CACHE BOOL "Disable audio hash support")
 set(WITH_VIDEO_HASH OFF CACHE BOOL "Disable video hash support")
 
 find_package(PkgConfig REQUIRED)
+
 pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
     libavdevice
     libavfilter
@@ -33,7 +34,7 @@ find_package(SQLite3 REQUIRED)
 
 find_package(spdlog REQUIRED)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Gui OpenGL)
 qt_standard_project_setup()
 
 add_subdirectory(vendor/phash)

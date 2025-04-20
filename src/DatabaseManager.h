@@ -17,8 +17,8 @@
      DatabaseManager(DatabaseManager const&) = delete;
      DatabaseManager& operator=(DatabaseManager const&) = delete;
  
-     void insertVideo(VideoInfo& video);
-     void insertAllHashes(int video_id, std::vector<uint64_t> const& pHashes);
+    std::optional<int> insertVideo(VideoInfo& video);
+    bool insertAllHashes(int video_id, std::vector<uint64_t> const& pHashes);
  
      std::vector<VideoInfo> getAllVideos() const;
      std::vector<HashGroup> getAllHashGroups() const;

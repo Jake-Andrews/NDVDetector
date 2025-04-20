@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "GPUVendor.h"
 #include "GroupRowDelegate.h"
 #include "RegexTesterDialog.h"
 #include "SearchSettings.h"
@@ -19,6 +20,11 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QUrl>
+#include <spdlog/spdlog.h>
+
+extern "C" {
+#include <libavutil/hwcontext.h>
+}
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -376,17 +382,69 @@ SearchSettings MainWindow::collectSearchSettings() const
         s.excludeDirPatterns.push_back(p.toStdString());
 
     // size limits
-    if (ui->minBytesSpin->value() > 0)
-        s.minBytes = static_cast<std::uint64_t>(ui->minBytesSpin->value());
-    if (ui->maxBytesSpin->value() > 0)
-        s.maxBytes = static_cast<std::uint64_t>(ui->maxBytesSpin->value());
+    if (ui->minBytesSpin->value() > 0) {
+        s.minBytes = static_cast<std::uint64_t>(ui->minBytesSpin->value() * 1024 * 1024);
+    }
+
+    if (ui->maxBytesSpin->value() > 0) {
+        s.maxBytes = static_cast<std::uint64_t>(ui->maxBytesSpin->value() * 1024 * 1024);
+    }
 
     // directories
     s.directories = getDirectorySettings();
     compileAllRegexes(s);
 
+    // hardware
+    auto hw_usable = [](AVHWDeviceType t) -> bool {
+        AVBufferRef* raw = nullptr;
+        bool const ok = av_hwdevice_ctx_create(&raw, t, nullptr, nullptr, 0) >= 0;
+        av_buffer_unref(&raw);
+        return ok;
+    };
+
+    auto choose_backend = [&](GPUVendor vendor) -> AVHWDeviceType {
+        for (auto const& entry : make_priority_list(vendor)) {
+            AVHWDeviceType dev = entry.second;
+            if (dev == AV_HWDEVICE_TYPE_NONE)
+                break; // sentinel
+            spdlog::info("[HW] probing {}", av_hwdevice_get_type_name(dev));
+            if (hw_usable(dev)) {
+                spdlog::info("[HW] using {}", av_hwdevice_get_type_name(dev));
+                return dev;
+            }
+        }
+
+        spdlog::error("[HW] No usable backend for vendor {}, falling back to CPU",
+            static_cast<int>(vendor));
+        return AV_HWDEVICE_TYPE_NONE;
+    };
+
+    /* ── Map UI combo‑box selection ───────────────────────────────────── */
+
+    switch (ui->hwDecodeComboBox->currentIndex()) {
+    case 1: // Nvidia
+        s.hwBackend = choose_backend(GPUVendor::Nvidia);
+        break;
+    case 2: // Intel
+        s.hwBackend = choose_backend(GPUVendor::Intel);
+        break;
+    case 3: // AMD
+        s.hwBackend = choose_backend(GPUVendor::AMD);
+        break;
+    case 4: // CPU only
+        s.hwBackend = AV_HWDEVICE_TYPE_NONE;
+        spdlog::info("[HW] Forced CPU decoding");
+        break;
+    default: { // Auto
+        GPUVendor const detected = detect_gpu();
+        spdlog::info("[HW] Auto‑detect found vendor {}", static_cast<int>(detected));
+        s.hwBackend = choose_backend(detected);
+        break;
+    }
+    }
     return s;
 }
+
 void MainWindow::onValidatePatternsClicked()
 {
     // build a *temporary* settings object from the form

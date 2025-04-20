@@ -5,6 +5,7 @@
 #include "FileSystemSearch.h"
 #include <QDebug>
 #include <filesystem>
+#include <spdlog/spdlog.h>
 #include <unordered_set>
 
 SearchWorker::SearchWorker(DatabaseManager& db, SearchSettings cfg, QObject* parent)
@@ -68,38 +69,52 @@ void SearchWorker::process()
 void SearchWorker::doExtractionAndDetection(std::vector<VideoInfo>& videos)
 {
     int hashedCount = 0;
-    int totalToHash = (int)videos.size();
+    int totalToHash = static_cast<int>(videos.size());
 
-    // Extract metadata, store in DB
     std::erase_if(videos, [&](VideoInfo& v) {
         if (!extract_info(v)) {
-            qWarning() << "Failed to extract info for:" << QString::fromStdString(v.path);
+            spdlog::warn("[Worker] Skipping video due to metadata extraction failure: {}", v.path);
             return true;
         }
 
         if (auto opt = extract_color_thumbnail(v.path)) {
             v.thumbnail_path = opt->toStdString();
         } else {
+            spdlog::warn("[Worker] Thumbnail generation failed for: {}", v.path);
             v.thumbnail_path = "./sneed.png";
         }
-        m_db.insertVideo(v);
+
+        auto id = m_db.insertVideo(v);
+        if (!id) {
+            spdlog::error("[DB] Failed to insert video metadata into database for: {}", v.path);
+            return true;
+        }
+        v.id = *id;
+
         return false;
     });
 
-    // screenshots + pHashes
     for (auto const& v : videos) {
-        auto frames = decode_video_frames_as_cimg(v.path, SKIP_PERCENT, v.duration);
+        auto frames = decode_video_frames_as_cimg(v.path, SKIP_PERCENT, v.duration, m_cfg.hwBackend, 100);
         if (frames.empty()) {
+            spdlog::warn("[Worker] No frames decoded for: {}", v.path);
             hashedCount++;
             emit hashingProgress(hashedCount, totalToHash);
             continue;
         }
 
         auto hashes = generate_pHashes(frames);
-        if (!hashes.empty()) {
-            m_db.insertAllHashes(v.id, hashes);
-        }
+
         hashedCount++;
         emit hashingProgress(hashedCount, totalToHash);
+
+        if (hashes.empty()) {
+            spdlog::warn("[Worker] No hashes generated for: {}", v.path);
+            continue;
+        }
+
+        if (!m_db.insertAllHashes(v.id, hashes)) {
+            spdlog::error("[DB] Failed to insert hashes for: {}", v.path);
+        }
     }
 }

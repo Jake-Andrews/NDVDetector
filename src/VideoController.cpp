@@ -16,7 +16,7 @@ VideoController::VideoController(DatabaseManager& db, QObject* parent)
 {
 }
 
-void VideoController::startSearch(SearchSettings const& cfg)
+void VideoController::startSearch()
 {
     if (m_cfg.directories.empty()) {
         emit errorOccurred("No directories specified. Please add at least one directory.");

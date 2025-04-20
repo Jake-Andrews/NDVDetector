@@ -7,31 +7,32 @@
 #include <unordered_set>
 #include <vector>
 
+extern "C" {
+#include <libavutil/hwcontext.h>
+}
+
+
 struct DirectoryEntry {
-    std::string path;            // absolute, normalised
+    std::string path;           // absolute, normalised
     bool        recursive = true;
 };
-inline void to_json(nlohmann::json& j, const DirectoryEntry& d) {
-    j = {{"path", d.path}, {"recursive", d.recursive}};
-}
-inline void from_json(const nlohmann::json& j, DirectoryEntry& d) {
-    j.at("path").get_to(d.path);
-    j.at("recursive").get_to(d.recursive);
-}
+
+inline void to_json(nlohmann::json& j, const DirectoryEntry& d) { j = {{"path", d.path}, {"recursive", d.recursive}}; }
+
+inline void from_json(const nlohmann::json& j, DirectoryEntry& d) { j.at("path").get_to(d.path); j.at("recursive").get_to(d.recursive); }
 
 struct SearchSettings {
-    bool useGlob         = false;   // translate * and ? into regex
-    bool caseInsensitive = false;   // compile with std::regex::icase
+    AVHWDeviceType hwBackend { AV_HWDEVICE_TYPE_NONE };
 
-    std::unordered_set<std::string> extensions;           // lower‑case
-    std::vector<std::string> includeFilePatterns,
-                              includeDirPatterns,
-                              excludeFilePatterns,
-                              excludeDirPatterns;
-    std::optional<std::uint64_t> minBytes, maxBytes;      // inclusive
+    bool useGlob         = false;
+    bool caseInsensitive = false;
+
+    std::unordered_set<std::string> extensions = {".mp4", ".mkv", ".webm"};
+    std::vector<std::string> includeFilePatterns, includeDirPatterns,
+                             excludeFilePatterns, excludeDirPatterns;
+    std::optional<std::uint64_t> minBytes, maxBytes;
     std::vector<DirectoryEntry>  directories;
 
-    // serialise *all* public data members 
     NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(SearchSettings,
         useGlob, caseInsensitive,
         extensions,

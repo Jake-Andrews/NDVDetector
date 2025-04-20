@@ -4,6 +4,7 @@
 #include "VideoInfo.h"
 
 #include <memory>
+#include <optional>
 #include <spdlog/spdlog.h>
 #include <sqlite3.h>
 #include <stdexcept>
@@ -61,7 +62,7 @@ DatabaseManager::~DatabaseManager()
     }
 }
 
-void DatabaseManager::insertVideo(VideoInfo& video)
+std::optional<int> DatabaseManager::insertVideo(VideoInfo& video)
 {
     static constexpr auto sql = R"(
         INSERT INTO video (
@@ -92,17 +93,17 @@ void DatabaseManager::insertVideo(VideoInfo& video)
         checkRc(sqlite3_bind_text(stmt.get(), 16, video.thumbnail_path.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind thumbnail_path");
         checkRc(sqlite3_step(stmt.get()), m_db, "execute insertVideo");
 
-        video.id = static_cast<int>(sqlite3_last_insert_rowid(m_db));
+        return static_cast<int>(sqlite3_last_insert_rowid(m_db));
     } catch (std::exception const& ex) {
         spdlog::error("insertVideo failed: {}", ex.what());
-        throw;
+        return std::nullopt;
     }
 }
 
-void DatabaseManager::insertAllHashes(int video_id, std::vector<uint64_t> const& pHashes)
+bool DatabaseManager::insertAllHashes(int video_id, std::vector<uint64_t> const& pHashes)
 {
     if (pHashes.empty())
-        return;
+        return true;
 
     static constexpr auto sql = R"(
         INSERT INTO hash (video_id, hash_blob) VALUES (?,?);
@@ -121,9 +122,10 @@ void DatabaseManager::insertAllHashes(int video_id, std::vector<uint64_t> const&
             m_db,
             "bind hash_blob");
         checkRc(sqlite3_step(stmt.get()), m_db, "execute insertAllHashes");
+        return true;
     } catch (std::exception const& ex) {
         spdlog::error("insertAllHashes failed: {}", ex.what());
-        throw;
+        return false;
     }
 }
 

@@ -89,6 +89,46 @@
            </widget>
           </item>
           <item>
+           <layout class="QHBoxLayout">
+            <item>
+             <widget class="QLabel" name="hwDecodeLabel">
+              <property name="text">
+               <string>HW Decoder:</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QComboBox" name="hwDecodeComboBox">
+              <item>
+               <property name="text">
+                <string>Auto</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>NVIDIA (NVDEC)</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>Intel (QSV)</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>AMD (VAAPI)</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>CPU Only</string>
+               </property>
+              </item>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
            <widget class="QPushButton" name="selectButton">
             <property name="text"><string>Select</string></property>
             <property name="minimumSize"><size><width>100</width><height>40</height></size></property>
@@ -211,9 +251,9 @@
             </widget>
            </item>
            <item row="5" column="1">
-            <widget class="QSpinBox" name="minBytesSpin">
-             <property name="maximum"><number>9223372036854775807</number></property>
-             <property name="suffix"><string> bytes</string></property>
+            <widget class="QDoubleSpinBox" name="minBytesSpin">
+             <property name="maximum"><double>100000.0</double></property>
+             <property name="suffix"><string> MB</string></property>
             </widget>
            </item>
            <item row="6" column="0">
@@ -222,9 +262,9 @@
             </widget>
            </item>
            <item row="6" column="1">
-            <widget class="QSpinBox" name="maxBytesSpin">
-             <property name="maximum"><number>9223372036854775807</number></property>
-             <property name="suffix"><string> bytes</string></property>
+            <widget class="QDoubleSpinBox" name="maxBytesSpin">
+             <property name="maximum"><double>100000.0</double></property>
+             <property name="suffix"><string> MB</string></property>
             </widget>
            </item>
            <item row="7" column="0">
