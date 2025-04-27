@@ -515,19 +515,29 @@ SearchSettings DatabaseManager::loadSettings() const
     if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
         auto* txt = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 0));
         if (txt) {
-            return nlohmann::json::parse(txt).get<SearchSettings>();
+            try {
+                return nlohmann::json::parse(txt).get<SearchSettings>();
+            } catch (nlohmann::json::exception const& e) {
+                spdlog::error("Failed to parse settings JSON: {}", e.what());
+                // Return default settings if parsing fails
+                return {};
+            }
         }
     }
+    // No settings found, return default
     return {};
 }
 
 void DatabaseManager::saveSettings(SearchSettings const& s)
 {
     nlohmann::json j = s;
-    std::string blob = j.dump();
+    std::string blob = j.dump(4); // j.dump(4) for pretty-printing
+
     static constexpr auto sql = "REPLACE INTO app_settings (id, json_blob) VALUES (1, ?);";
     auto stmt = prepareStatement(m_db, sql);
+
     checkRc(sqlite3_bind_text(stmt.get(), 1, blob.c_str(), -1, SQLITE_TRANSIENT),
         m_db, "bind settings json");
+
     checkRc(sqlite3_step(stmt.get()), m_db, "save settings");
 }

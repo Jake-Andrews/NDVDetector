@@ -4,7 +4,6 @@
 #include <optional>
 #include <regex>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 extern "C" {
@@ -17,9 +16,14 @@ struct DirectoryEntry {
     bool        recursive = true;
 };
 
-inline void to_json(nlohmann::json& j, const DirectoryEntry& d) { j = {{"path", d.path}, {"recursive", d.recursive}}; }
+inline void to_json(nlohmann::json& j, const DirectoryEntry& d) { 
+    j = nlohmann::json{{"path", d.path}, {"recursive", d.recursive}}; 
+}
 
-inline void from_json(const nlohmann::json& j, DirectoryEntry& d) { j.at("path").get_to(d.path); j.at("recursive").get_to(d.recursive); }
+inline void from_json(const nlohmann::json& j, DirectoryEntry& d) { 
+    j.at("path").get_to(d.path); 
+    j.at("recursive").get_to(d.recursive); 
+}
 
 struct SearchSettings {
     AVHWDeviceType hwBackend { AV_HWDEVICE_TYPE_NONE };
@@ -27,23 +31,53 @@ struct SearchSettings {
     bool useGlob         = false;
     bool caseInsensitive = false;
 
-    std::unordered_set<std::string> extensions = {".mp4", ".mkv", ".webm"};
+    std::vector<std::string> extensions = {".mp4", ".mkv", ".webm"};
     std::vector<std::string> includeFilePatterns, includeDirPatterns,
                              excludeFilePatterns, excludeDirPatterns;
     std::optional<std::uint64_t> minBytes, maxBytes;
     std::vector<DirectoryEntry>  directories;
 
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(SearchSettings,
-        useGlob, caseInsensitive,
-        extensions,
-        includeFilePatterns, includeDirPatterns,
-        excludeFilePatterns, excludeDirPatterns,
-        minBytes, maxBytes, directories)
-
-    // pre‑compiled regexes (not serialised)
     std::vector<std::regex> includeFileRx, includeDirRx,
                             excludeFileRx, excludeDirRx;
 };
+
+inline void to_json(nlohmann::json& j, const SearchSettings& s) {
+    j = nlohmann::json{
+        {"useGlob", s.useGlob},
+        {"caseInsensitive", s.caseInsensitive},
+        {"extensions", s.extensions},
+        {"includeFilePatterns", s.includeFilePatterns},
+        {"includeDirPatterns", s.includeDirPatterns},
+        {"excludeFilePatterns", s.excludeFilePatterns},
+        {"excludeDirPatterns", s.excludeDirPatterns},
+        {"directories", s.directories}
+    };
+
+    j["minBytes"] = s.minBytes.has_value() ? nlohmann::json(*s.minBytes) : nullptr;
+    j["maxBytes"] = s.maxBytes.has_value() ? nlohmann::json(*s.maxBytes) : nullptr;
+}
+
+inline void from_json(const nlohmann::json& j, SearchSettings& s) {
+    j.at("useGlob").get_to(s.useGlob);
+    j.at("caseInsensitive").get_to(s.caseInsensitive);
+    j.at("extensions").get_to(s.extensions);
+    j.at("includeFilePatterns").get_to(s.includeFilePatterns);
+    j.at("includeDirPatterns").get_to(s.includeDirPatterns);
+    j.at("excludeFilePatterns").get_to(s.excludeFilePatterns);
+    j.at("excludeDirPatterns").get_to(s.excludeDirPatterns);
+    j.at("directories").get_to(s.directories);
+
+    if (j.contains("minBytes") && !j.at("minBytes").is_null())
+        s.minBytes = j.at("minBytes").get<std::uint64_t>();
+    else
+        s.minBytes = std::nullopt;
+
+    if (j.contains("maxBytes") && !j.at("maxBytes").is_null())
+        s.maxBytes = j.at("maxBytes").get<std::uint64_t>();
+    else
+        s.maxBytes = std::nullopt;
+}
+
 
 namespace detail {
 inline std::string globToRegex(std::string_view glob) {

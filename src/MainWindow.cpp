@@ -361,7 +361,7 @@ SearchSettings MainWindow::collectSearchSettings() const
             ext = ext.trimmed().toLower();
             if (!ext.startsWith('.'))
                 ext.prepend('.');
-            s.extensions.insert(ext.toStdString());
+            s.extensions.push_back(ext.toStdString());
         }
     }
 

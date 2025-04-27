@@ -1,16 +1,29 @@
-#include "DecodingFrames.h"
-#include "GPUVendor.h"
+#include "PHashCalculator.h"
 
 #include <QCryptographicHash>
-#include <QDebug>
 #include <QDir>
 #include <QFileInfo>
 #include <QImage>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstring>
 #include <memory>
+#include <optional>
 #include <spdlog/spdlog.h>
 #include <string>
+#include <thread>
 #include <vector>
 
+// ─── libplacebo ───────────────────────────────────────────────
+#include <libplacebo/dispatch.h>
+#include <libplacebo/gpu.h>
+#include <libplacebo/log.h>
+#include <libplacebo/utils/libav.h>
+#include <libplacebo/vulkan.h>
+
+// ─── FFmpeg ───────────────────────────────────────────────────
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -22,543 +35,420 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
-QString hashPath(QString const& path)
-{
-    return QString(QCryptographicHash::hash(path.toUtf8(), QCryptographicHash::Sha1).toHex());
-}
-
 namespace {
 
-void free_format_ctx(AVFormatContext* ctx)
+// -------------------------------------------------------------
+//  Helper utilities
+// -------------------------------------------------------------
+inline char const* ff_err2str(int err) noexcept
 {
-    if (ctx)
-        avformat_close_input(&ctx);
+    static thread_local char buf[AV_ERROR_MAX_STRING_SIZE];
+    return av_make_error_string(buf, sizeof(buf), err);
 }
 
-void free_codec_ctx(AVCodecContext* ctx)
+inline std::string_view pix_fmt_name(AVPixelFormat fmt) noexcept
 {
-    if (ctx)
-        avcodec_free_context(&ctx);
+    if (auto* n = av_get_pix_fmt_name(fmt))
+        return n;
+    return "unknown";
 }
 
-void free_frame(AVFrame* frame)
+template<auto Fn>
+struct CDeleter {
+    template<typename T>
+    void operator()(T* p) const noexcept
+    {
+        if (p)
+            Fn(&p);
+    }
+};
+
+struct SwsDeleter {
+    void operator()(SwsContext* ctx) const noexcept { sws_freeContext(ctx); }
+};
+
+using LogPtr = std::unique_ptr<pl_log_t const, CDeleter<&pl_log_destroy>>;
+using DispPtr = std::unique_ptr<pl_dispatch, CDeleter<&pl_dispatch_destroy>>;
+using SwsPtr = std::unique_ptr<SwsContext, SwsDeleter>;
+using FmtPtr = std::unique_ptr<AVFormatContext, CDeleter<&avformat_close_input>>;
+using CtxPtr = std::unique_ptr<AVCodecContext, CDeleter<&avcodec_free_context>>;
+using FrmPtr = std::unique_ptr<AVFrame, CDeleter<&av_frame_free>>;
+using PktPtr = std::unique_ptr<AVPacket, CDeleter<&av_packet_free>>;
+using BufPtr = std::unique_ptr<AVBufferRef, CDeleter<&av_buffer_unref>>;
+
+// ── Vulkan RAII wrapper ───────────────────────────────────────
+struct VulkanHandle {
+    pl_vulkan vk { nullptr };
+    VulkanHandle() = default;
+    explicit VulkanHandle(pl_vulkan v)
+        : vk(v)
+    {
+    }
+    VulkanHandle(VulkanHandle const&) = delete;
+    VulkanHandle& operator=(VulkanHandle const&) = delete;
+    VulkanHandle(VulkanHandle&& o) noexcept
+        : vk(std::exchange(o.vk, nullptr))
+    {
+    }
+    VulkanHandle& operator=(VulkanHandle&& o) noexcept
+    {
+        if (this != &o) {
+            reset();
+            vk = std::exchange(o.vk, nullptr);
+        }
+        return *this;
+    }
+    ~VulkanHandle() { reset(); }
+    void reset(pl_vulkan new_vk = nullptr)
+    {
+        if (vk)
+            pl_vulkan_destroy(&vk);
+        vk = new_vk;
+    }
+    [[nodiscard]] pl_vulkan get() const noexcept { return vk; }
+    [[nodiscard]] explicit operator bool() const noexcept { return vk != nullptr; }
+};
+
+// ── Constants ────────────────────────────────────────────────
+static constexpr int kProbeSize = 10 * 1024 * 1024; // 10 MiB
+static constexpr int kAnalyzeUsec = 10 * 1'000'000; // 10 s
+static constexpr int kOutW = 32, kOutH = 32;
+static constexpr AVPixelFormat kOutPix = AV_PIX_FMT_GRAY8;
+
+// ── Logging helpers ───────────────────────────────────────────
+inline void log_backend_choice(bool hw_ok,
+    AVHWDeviceType dev,
+    AVPixelFormat hwfmt,
+    bool gpu_ok)
 {
-    if (frame)
-        av_frame_free(&frame);
+    if (hw_ok) {
+        spdlog::info("[decode] Using HW decode: {} (fmt {})",
+            av_hwdevice_get_type_name(dev),
+            pix_fmt_name(hwfmt));
+        if (gpu_ok)
+            spdlog::info("[gpu]   GPU → CPU zero-copy path active");
+        else
+            spdlog::info("[gpu]   GPU interop disabled (no Vulkan or mapping failed)");
+    } else {
+        spdlog::info("[decode] Using *software* decode path");
+    }
 }
 
-void free_packet(AVPacket* pkt)
+// ── Misc helpers ──────────────────────────────────────────────
+inline int64_t sec_to_pts(double sec, AVRational tb)
 {
-    if (pkt)
-        av_packet_free(&pkt);
+    return static_cast<int64_t>(std::llround(sec / av_q2d(tb)));
 }
 
-void free_sws_ctx(SwsContext* sws)
+// ── Optional Vulkan backend ───────────────────────────────────
+VulkanHandle make_vk(LogPtr const& log)
 {
-    if (sws)
-        sws_freeContext(sws);
+    pl_vulkan_params params {
+        .async_transfer = true,
+        .async_compute = true,
+        .queue_count = 1,
+    };
+    if (auto* vk = pl_vulkan_create(log.get(), &params)) {
+        spdlog::info("[gpu] Vulkan backend initialised");
+        return VulkanHandle { vk };
+    }
+    spdlog::warn("[gpu] Vulkan backend initialisation failed – continuing without GPU optimisation");
+    return {};
 }
-
-void free_bufref(AVBufferRef* ref)
-{
-    if (ref)
-        av_buffer_unref(&ref);
-}
-
-using FormatCtxPtr = std::unique_ptr<AVFormatContext, decltype(&free_format_ctx)>;
-using CodecCtxPtr = std::unique_ptr<AVCodecContext, decltype(&free_codec_ctx)>;
-using FramePtr = std::unique_ptr<AVFrame, decltype(&free_frame)>;
-using PacketPtr = std::unique_ptr<AVPacket, decltype(&free_packet)>;
-using SwsContextPtr = std::unique_ptr<SwsContext, decltype(&free_sws_ctx)>;
-using BufRefPtr = std::unique_ptr<AVBufferRef, decltype(&free_bufref)>;
-
-inline char const* av_err2str_wrap(int err)
-{
-    static thread_local char str[AV_ERROR_MAX_STRING_SIZE] = { 0 };
-    return av_make_error_string(str, AV_ERROR_MAX_STRING_SIZE, err);
-}
-
-constexpr int kProbeSize = 10 * 1024 * 1024;   // 10 MB
-constexpr int kAnalyzeDuration = 10 * 1000000; // 10 s (µs)
 
 } // namespace
 
-std::vector<cimg_library::CImg<float>>
-decode_video_frames_as_cimg(std::string const& file_path,
-    double skip_percent,
-    int video_duration_sec,
-    AVHWDeviceType hwBackend,
+// ============================================================================
+//  PUBLIC API
+// ============================================================================
+std::vector<uint64_t> extract_phashes_from_video(std::string const& file,
+    double skip_pct,
+    int duration_s,
+    AVHWDeviceType hw_backend,
     int max_frames)
 {
-    using namespace cimg_library;
-    constexpr int kMaxConsecutiveErrors = 8;
-    constexpr int kMaxTotalErrors = 32;
-    constexpr auto kOutPix = AV_PIX_FMT_GRAY8;
-    constexpr int kOutW = 32, kOutH = 32;
+    spdlog::debug("[decode] Starting pHash extraction for '{}'", file);
 
-    enum class DecodeBackend { Unknown,
-        Hardware,
-        Software };
-    DecodeBackend backendUsed = DecodeBackend::Unknown;
+    // ── libplacebo logging (mirrors to spdlog at INFO) ────────
+    pl_log_params lp {
+        .log_cb = pl_log_simple,
+        .log_level = PL_LOG_INFO
+    };
+    LogPtr log { pl_log_create(PL_API_VER, &lp) };
 
-    // Output container
-    std::vector<CImg<float>> frames;
-    frames.reserve(max_frames > 0 ? max_frames : 64);
+    // ── Optional GPU backend (only if caller requested Vulkan) ─
+    VulkanHandle vk;
+    if (hw_backend == AV_HWDEVICE_TYPE_VULKAN)
+        vk = make_vk(log);
 
-    // Time window to sample
-    skip_percent = std::clamp(skip_percent, 0.0, 0.40);
-    double start_s = video_duration_sec > 0 ? video_duration_sec * skip_percent : 0.0;
-    double end_s = video_duration_sec > 0 ? video_duration_sec * (1.0 - skip_percent) : std::numeric_limits<double>::max();
+    pl_gpu gpu = vk ? vk.get()->gpu : nullptr;
+    bool gpu_ok = gpu != nullptr;
 
-    // Open container
-    AVDictionary* fmt_opts = nullptr;
-    av_dict_set_int(&fmt_opts, "probesize", kProbeSize, 0);
-    av_dict_set_int(&fmt_opts, "analyzeduration", kAnalyzeDuration, 0);
+    // ── Open input container ──────────────────────────────────
+    FmtPtr fmt;
+    {
+        AVDictionary* fmt_opts = nullptr;
+        av_dict_set_int(&fmt_opts, "probesize", kProbeSize, 0);
+        av_dict_set_int(&fmt_opts, "analyzeduration", kAnalyzeUsec, 0);
 
-    int ret = 0;
-    AVFormatContext* raw_fmt = nullptr;
-    if ((ret = avformat_open_input(&raw_fmt, file_path.c_str(), nullptr, &fmt_opts)) < 0) {
-        spdlog::error("[decode] Cannot open '{}': {}", file_path, av_err2str_wrap(ret));
-        return frames;
-    }
-    FormatCtxPtr fmt(raw_fmt, &free_format_ctx);
-    av_dict_free(&fmt_opts);
-
-    fmt->flags |= AVFMT_FLAG_GENPTS;
-
-    if ((ret = avformat_find_stream_info(fmt.get(), nullptr)) < 0) {
-        spdlog::error("[decode] Could not read stream info '{}': {}", file_path, av_err2str_wrap(ret));
-        return frames;
+        AVFormatContext* raw = nullptr;
+        if (int err = avformat_open_input(&raw, file.c_str(), nullptr, &fmt_opts); err < 0) {
+            spdlog::error("[decode] avformat_open_input: {}", ff_err2str(err));
+            av_dict_free(&fmt_opts);
+            return {};
+        }
+        av_dict_free(&fmt_opts);
+        fmt.reset(raw);
     }
 
-    // Pick stream / decoder
-    int const video_idx = av_find_best_stream(fmt.get(), AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-    if (video_idx < 0) {
-        spdlog::warn("[decode] No video stream in '{}'", file_path);
-        return frames;
+    if (int err = avformat_find_stream_info(fmt.get(), nullptr); err < 0) {
+        spdlog::error("[decode] avformat_find_stream_info: {}", ff_err2str(err));
+        return {};
     }
 
-    AVStream* st = fmt->streams[video_idx];
-    AVCodecID cid = st->codecpar->codec_id;
-    AVCodec const* dec = avcodec_find_decoder(cid);
+    int vstream = av_find_best_stream(fmt.get(), AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    if (vstream < 0) {
+        spdlog::warn("[decode] No video stream found");
+        return {};
+    }
+    AVStream* st = fmt->streams[vstream];
+    AVCodec const* dec = avcodec_find_decoder(st->codecpar->codec_id);
     if (!dec) {
-        spdlog::warn("[decode] No decoder for '{}' in '{}'", avcodec_get_name(cid), file_path);
-        return frames;
+        spdlog::warn("[decode] No decoder for codec {}", int(st->codecpar->codec_id));
+        return {};
     }
 
-    // Codec‑context factory
-    auto makeCodecCtx = [&](bool want_hw) -> CodecCtxPtr {
-        CodecCtxPtr c(avcodec_alloc_context3(dec), &free_codec_ctx);
-        if (!c)
-            return CodecCtxPtr(nullptr, &free_codec_ctx);
-        if ((ret = avcodec_parameters_to_context(c.get(), st->codecpar)) < 0) {
-            spdlog::error("[decode] avcodec_parameters_to_context: {}", av_err2str_wrap(ret));
-            return CodecCtxPtr(nullptr, &free_codec_ctx);
-        }
-
-        c->err_recognition = AV_EF_CAREFUL | AV_EF_CRCCHECK;
-
-        // if software, use all cores; if hardware, leave 0 (=driver default)
-        c->thread_type = FF_THREAD_FRAME;
-        c->thread_count = want_hw ? 0 : std::max(1u, std::thread::hardware_concurrency());
-
-        return c;
+    // ── Codec context creation helpers ────────────────────────
+    auto make_ctx = [&](bool hw) -> CtxPtr {
+        CtxPtr ctx { avcodec_alloc_context3(dec) };
+        if (!ctx)
+            return {};
+        if (avcodec_parameters_to_context(ctx.get(), st->codecpar) < 0)
+            return {};
+        ctx->thread_type = FF_THREAD_FRAME;
+        ctx->thread_count = hw ? 0u
+                               : std::max(1u, std::thread::hardware_concurrency());
+        return ctx;
     };
 
-    CodecCtxPtr codecCtx(nullptr, &free_codec_ctx);
-    BufRefPtr hwDev(nullptr, &free_bufref);
-    AVPixelFormat hwFmt = AV_PIX_FMT_NONE;
+    CtxPtr cc;                              // final codec context
+    BufPtr hwdev;                           // retained hw device
+    AVPixelFormat hw_fmt = AV_PIX_FMT_NONE; // chosen hw pixfmt
 
-    auto openCodec = [&](CodecCtxPtr& ctx, AVDictionary* d) -> bool {
-        int r = avcodec_open2(ctx.get(), dec, &d);
-        av_dict_free(&d);
-        if (r < 0) {
-            spdlog::warn("[decode] avcodec_open2 failed: {}", av_err2str_wrap(r));
-            return false;
-        }
-        return true;
-    };
-
-    // Attempt hardware decoding setup
-    bool hwOpened = false;
-    if (hwBackend != AV_HWDEVICE_TYPE_NONE) {
-        for (int i = 0;; ++i) {
-            AVCodecHWConfig const* cfg = avcodec_get_hw_config(dec, i);
-            if (!cfg)
-                break;
-            if ((cfg->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) && cfg->device_type == hwBackend) {
-                hwFmt = cfg->pix_fmt;
+    // ── Attempt HW decode initialisation ─────────────────────
+    if (hw_backend != AV_HWDEVICE_TYPE_NONE) {
+        for (int i = 0; auto* cfg = avcodec_get_hw_config(dec, i); ++i) {
+            if (cfg->device_type == hw_backend && (cfg->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX)) {
+                hw_fmt = cfg->pix_fmt;
                 break;
             }
         }
 
-        if (hwFmt != AV_PIX_FMT_NONE) {
+        if (hw_fmt != AV_PIX_FMT_NONE) {
             AVBufferRef* tmp = nullptr;
-            if (av_hwdevice_ctx_create(&tmp, hwBackend, nullptr, nullptr, 0) == 0) {
-                hwDev.reset(tmp);
-
-                codecCtx = makeCodecCtx(true);
-                if (codecCtx) {
-                    codecCtx->hw_device_ctx = av_buffer_ref(hwDev.get());
-                    codecCtx->opaque = reinterpret_cast<void*>(static_cast<intptr_t>(hwFmt));
-                    codecCtx->get_format = [](AVCodecContext* c, AVPixelFormat const* fmts) {
-                        AVPixelFormat want = static_cast<AVPixelFormat>(reinterpret_cast<intptr_t>(c->opaque));
-                        for (auto p = fmts; *p != AV_PIX_FMT_NONE; ++p)
+            if (av_hwdevice_ctx_create(&tmp, hw_backend, nullptr, nullptr, 0) == 0) {
+                hwdev.reset(tmp);
+                cc = make_ctx(true);
+                if (cc) {
+                    cc->hw_device_ctx = av_buffer_ref(hwdev.get());
+                    cc->opaque = reinterpret_cast<void*>(static_cast<intptr_t>(hw_fmt));
+                    cc->get_format = [](AVCodecContext* c, AVPixelFormat const* fmts) {
+                        auto want = static_cast<AVPixelFormat>(
+                            reinterpret_cast<intptr_t>(c->opaque));
+                        for (auto* p = fmts; *p != AV_PIX_FMT_NONE; ++p)
                             if (*p == want)
                                 return *p;
                         return fmts[0];
                     };
-                    if (openCodec(codecCtx, nullptr)) {
-                        hwOpened = true;
-                        backendUsed = DecodeBackend::Hardware;
+                    if (avcodec_open2(cc.get(), dec, nullptr) < 0) {
+                        spdlog::warn("[decode] HW initialisation failed – will fall back");
+                        cc.reset();
                     }
                 }
+            } else {
+                spdlog::warn("[decode] av_hwdevice_ctx_create failed – will fall back");
             }
+        } else {
+            spdlog::info("[decode] No matching HW pixfmt for backend {}", av_hwdevice_get_type_name(hw_backend));
         }
     }
 
-    // Fallback to software decoding if hardware decoding failed
-    if (!hwOpened) {
-        spdlog::info("[decode] Falling back to software for '{}'", file_path);
-        codecCtx = makeCodecCtx(false);
-        if (!codecCtx || !openCodec(codecCtx, nullptr)) {
-            spdlog::warn("[decode] Software fallback also failed for '{}'", file_path);
-            return frames;
+    // ── Fallback to software decode if needed ─────────────────
+    bool using_hw = static_cast<bool>(cc);
+    if (!cc) {
+        cc = make_ctx(false);
+        if (!cc || avcodec_open2(cc.get(), dec, nullptr) < 0) {
+            spdlog::error("[decode] Unable to open decoder in either HW or SW mode");
+            return {};
         }
-        backendUsed = DecodeBackend::Software;
+        gpu_ok = false; // interop makes no sense on SW path
     }
 
-    // backend logger
-    bool backendLogged = false;
-    auto log_backend = [&] {
-        if (backendLogged)
-            return;
-        backendLogged = true;
-        if (backendUsed == DecodeBackend::Hardware)
-            spdlog::info("[decode] Final backend: Hardware ({}) for '{}'",
-                av_hwdevice_get_type_name(hwBackend), file_path);
-        else if (backendUsed == DecodeBackend::Software)
-            spdlog::info("[decode] Final backend: Software ({}) for '{}'",
-                avcodec_get_name(cid), file_path);
-        else
-            spdlog::warn("[decode] Final backend: Unknown for '{}'", file_path);
-    };
+    log_backend_choice(using_hw, hw_backend, hw_fmt, gpu_ok);
 
-    // Helpers to decide if a frame is still hardware‑accelerated
-    auto really_used_hw = [&](AVFrame const* f) {
-        return backendUsed == DecodeBackend::Hardware && f->format == hwFmt;
-    };
-
-    // Seek / time calculations
-    AVRational tb = st->time_base;
-    auto sec2pts = [&](double s) { return llround(s / av_q2d(tb)); };
-    int64_t startPts = sec2pts(start_s);
-    int64_t endPts = sec2pts(end_s);
-    int64_t stepPts = sec2pts(1.0); // sample @ 1 fps
-    int64_t nextCapture = startPts;
-
-    if (startPts > 0 && av_seek_frame(fmt.get(), video_idx, startPts, AVSEEK_FLAG_BACKWARD) >= 0)
-        avcodec_flush_buffers(codecCtx.get());
-
-    // Scaler managed by unique_ptr
-    using SwsPtr = std::unique_ptr<SwsContext, decltype(&sws_freeContext)>;
-    SwsPtr sws(nullptr, &sws_freeContext);
+    // ── Software scaler (CPU) ─────────────────────────────────
+    SwsPtr sws_ctx;
     int srcW = 0, srcH = 0;
     AVPixelFormat srcFmt = AV_PIX_FMT_NONE;
 
-    auto makeScaler = [&](int w, int h, AVPixelFormat f) -> bool {
-        if (sws && w == srcW && h == srcH && f == srcFmt)
+    auto ensure_sws = [&](int w, int h, AVPixelFormat fmt) {
+        if (sws_ctx && w == srcW && h == srcH && fmt == srcFmt)
             return true;
-        sws.reset(sws_getContext(w, h, f, kOutW, kOutH, kOutPix,
+        sws_ctx.reset(sws_getContext(w, h, fmt,
+            kOutW, kOutH, kOutPix,
             SWS_FAST_BILINEAR, nullptr, nullptr, nullptr));
-        if (!sws) {
-            spdlog::error("[decode] sws_getContext failed");
-            return false;
-        }
         srcW = w;
         srcH = h;
-        srcFmt = f;
-        return true;
+        srcFmt = fmt;
+        if (!sws_ctx)
+            spdlog::error("[sws] Failed to allocate context ({}×{}, {})",
+                w, h, pix_fmt_name(fmt));
+        return static_cast<bool>(sws_ctx);
     };
 
-    // Pre‑allocated frames & buffers
-    FramePtr dst(av_frame_alloc(), &free_frame);
-    FramePtr frm(av_frame_alloc(), &free_frame);
-    FramePtr sw(av_frame_alloc(), &free_frame);
-    PacketPtr pkt(av_packet_alloc(), &free_packet);
+    // ── Frame / packet buffers ────────────────────────────────
+    FrmPtr frm { av_frame_alloc() };
+    FrmPtr swf { av_frame_alloc() };
+    PktPtr pkt { av_packet_alloc() };
 
-    std::vector<uint8_t> gray(kOutW * kOutH);
-    av_image_fill_arrays(dst->data, dst->linesize, gray.data(),
-        kOutPix, kOutW, kOutH, 1);
-    dst->width = kOutW;
-    dst->height = kOutH;
-    dst->format = kOutPix;
+    std::array<uint8_t, kOutW * kOutH> gray_buf {};
+    FrmPtr out { av_frame_alloc() };
+    av_image_fill_arrays(out->data, out->linesize,
+        gray_buf.data(), kOutPix, kOutW, kOutH, 1);
+    out->width = kOutW;
+    out->height = kOutH;
+    out->format = kOutPix;
 
-    auto pushFrame = [&] {
-        CImg<float> img(kOutW, kOutH, 1, 1);
-        for (int y = 0; y < kOutH; ++y) {
-            uint8_t const* s = dst->data[0] + y * dst->linesize[0];
-            float* o = img.data(0, y);
-            for (int x = 0; x < kOutW; ++x)
-                o[x] = s[x] / 255.f;
+    // ── Optional GPU texture ──────────────────────────────────
+    pl_tex dst_tex = nullptr;
+    auto create_dst_tex = [&]() -> pl_tex {
+        pl_tex_params tp {};
+        tp.w = kOutW;
+        tp.h = kOutH;
+        tp.sampleable = true;
+        tp.blit_dst = true;
+        tp.host_readable = true;
+        tp.format = pl_find_fmt(gpu, PL_FMT_UNORM, 1, 8, 0,
+            static_cast<pl_fmt_caps>(PL_FMT_CAP_SAMPLEABLE | PL_FMT_CAP_HOST_READABLE | PL_FMT_CAP_BLITTABLE));
+        return pl_tex_create(gpu, &tp);
+    };
+
+    // ── Seek / time-range calculation ─────────────────────────
+    double pct = std::clamp(skip_pct, 0.0, 0.40);
+    int64_t next_pts = sec_to_pts(pct * duration_s, st->time_base);
+    int64_t end_pts = sec_to_pts((1.0 - pct) * duration_s, st->time_base);
+    int64_t step_pts = sec_to_pts(1.0, st->time_base);
+
+    if (next_pts && av_seek_frame(fmt.get(), vstream, next_pts, AVSEEK_FLAG_BACKWARD) >= 0) {
+        spdlog::debug("[decode] Seeked to {}", next_pts);
+        avcodec_flush_buffers(cc.get());
+    }
+
+    // ── Lambda helpers ────────────────────────────────────────
+    std::vector<uint64_t> hashes;
+    hashes.reserve(max_frames > 0 ? max_frames : 64);
+
+    auto push_hash = [&](uint8_t const* g) {
+        if (auto h = PHashCalculator::calculatePHash(g, kOutW, kOutH))
+            hashes.push_back(*h);
+    };
+
+    auto cpu_process = [&](AVFrame* f) {
+        if (!ensure_sws(f->width, f->height, static_cast<AVPixelFormat>(f->format)))
+            return;
+        sws_scale(sws_ctx.get(), f->data, f->linesize, 0, f->height,
+            out->data, out->linesize);
+        push_hash(out->data[0]);
+    };
+
+    auto gpu_process = [&](AVFrame* f) {
+        if (!gpu_ok)
+            return;
+
+        pl_frame pf {};
+        pl_avframe_params params { .frame = f, .tex = nullptr };
+        if (!pl_map_avframe_ex(gpu, &pf, &params)) {
+            spdlog::warn("[gpu] pl_map_avframe_ex failed – disabling GPU optimisation");
+            gpu_ok = false;
+            return;
         }
-        frames.emplace_back(std::move(img));
+
+        if (!dst_tex && !(dst_tex = create_dst_tex())) {
+            spdlog::warn("[gpu] Could not create destination texture – disabling GPU optimisation");
+            gpu_ok = false;
+            pl_unmap_avframe(gpu, &pf);
+            return;
+        }
+
+        pl_tex_blit_params blit {
+            .src = pf.planes[0].texture,
+            .dst = dst_tex,
+            .sample_mode = PL_TEX_SAMPLE_LINEAR
+        };
+        pl_tex_blit(gpu, &blit);
+        pl_unmap_avframe(gpu, &pf);
+
+        pl_tex_transfer_params tp {
+            .tex = dst_tex,
+            .row_pitch = static_cast<size_t>(kOutW),
+            .timer = nullptr,
+            .ptr = gray_buf.data()
+        };
+        if (pl_tex_download(gpu, &tp))
+            push_hash(gray_buf.data());
+        else
+            spdlog::warn("[gpu] Texture download failed");
     };
 
-    // Error tracking
-    int consecutiveErr = 0, totalErr = 0;
-    auto tooManyErrors = [&] {
-        return consecutiveErr >= kMaxConsecutiveErrors || totalErr >= kMaxTotalErrors;
-    };
+    // ── Main decode loop ──────────────────────────────────────
+    while (true) {
+        if (av_read_frame(fmt.get(), pkt.get()) < 0) {
+            // Fabricate EOF
+            pkt->data = nullptr;
+            pkt->size = 0;
+        }
 
-    // Drain helper: receive‑frame loop
-    auto drain = [&]() -> bool {
-        while ((ret = avcodec_receive_frame(codecCtx.get(), frm.get())) >= 0) {
+        if (pkt->data && pkt->stream_index != vstream) {
+            av_packet_unref(pkt.get());
+            continue;
+        }
 
-            // Detect silent SW fallback and fix log
-            if (!really_used_hw(frm.get()) && backendUsed == DecodeBackend::Hardware) {
-                backendUsed = DecodeBackend::Software;
-                // bump threads now that we know we’re on CPU
-                if (codecCtx->thread_count <= 1) {
-                    codecCtx->thread_count = std::max(1u, std::thread::hardware_concurrency());
-                }
-            }
-            log_backend(); // prints only once
+        int err = avcodec_send_packet(cc.get(), pkt.get());
+        if (err < 0 && err != AVERROR(EAGAIN) && err != AVERROR_EOF)
+            spdlog::warn("[decode] avcodec_send_packet: {}", ff_err2str(err));
+        av_packet_unref(pkt.get());
 
-            // reset consecutive errors on *successful push*
-            consecutiveErr = 0;
-
-            // time‑window filtering
+        while (avcodec_receive_frame(cc.get(), frm.get()) == 0) {
             int64_t pts = frm->best_effort_timestamp;
-            if (pts < startPts || pts > endPts || pts < nextCapture) {
+            if (pts < next_pts || pts > end_pts) {
                 av_frame_unref(frm.get());
                 continue;
             }
-            nextCapture += stepPts;
+            next_pts += step_pts;
 
-            // choose frame to scale
-            AVFrame* use = frm.get();
-            if (really_used_hw(frm.get())) {
-                if (av_hwframe_transfer_data(sw.get(), frm.get(), 0) < 0) {
-                    spdlog::warn("[decode] hwframe_transfer_data failed");
-                    av_frame_unref(frm.get());
-                    continue;
-                }
-                use = sw.get();
+            bool frame_is_hw = (frm->format == hw_fmt);
+            if (frame_is_hw && gpu_ok) {
+                gpu_process(frm.get());
+            } else if (frame_is_hw && !gpu_ok) {
+                if (av_hwframe_transfer_data(swf.get(), frm.get(), 0) == 0)
+                    cpu_process(swf.get());
+            } else {
+                cpu_process(frm.get());
             }
-
-            if (!makeScaler(use->width, use->height,
-                    static_cast<AVPixelFormat>(use->format))
-                || sws_scale(sws.get(), use->data, use->linesize, 0, use->height,
-                       dst->data, dst->linesize)
-                    <= 0) {
-                spdlog::warn("[decode] sws_scale failed");
-                av_frame_unref(frm.get());
-                continue;
-            }
-            pushFrame();
             av_frame_unref(frm.get());
 
-            if (max_frames > 0 && static_cast<int>(frames.size()) >= max_frames)
-                return true;
+            if (max_frames > 0 && static_cast<int>(hashes.size()) >= max_frames)
+                goto finished;
         }
 
-        if (ret != AVERROR_EOF && ret != AVERROR(EAGAIN)) {
-            ++consecutiveErr;
-            ++totalErr;
-            spdlog::warn("[decode] avcodec_receive_frame: {}", av_err2str_wrap(ret));
-        }
-        return tooManyErrors();
-    };
-
-    // Main read/decode loop
-    while (!tooManyErrors() && av_read_frame(fmt.get(), pkt.get()) >= 0) {
-        if (pkt->stream_index != video_idx) {
-            av_packet_unref(pkt.get());
-            continue;
-        }
-
-        ret = avcodec_send_packet(codecCtx.get(), pkt.get());
-        av_packet_unref(pkt.get());
-
-        if (ret < 0 && ret != AVERROR_EOF && ret != AVERROR(EAGAIN)) {
-            ++consecutiveErr;
-            ++totalErr;
-            spdlog::warn("[decode] avcodec_send_packet: {}", av_err2str_wrap(ret));
-            continue;
-        }
-        consecutiveErr = 0;
-
-        if (drain())
-            break;
+        if (!pkt->data)
+            break; // EOF
     }
 
-    // Flush decoder
-    avcodec_send_packet(codecCtx.get(), nullptr);
-    drain();
+finished:
+    if (gpu && dst_tex)
+        pl_tex_destroy(gpu, &dst_tex);
 
-    if (tooManyErrors()) {
-        spdlog::error("[decode] Aborted '{}': exceeded error budget ({} total, {} consecutive)",
-            file_path, totalErr, consecutiveErr);
-    }
-    return frames;
-}
-
-[[nodiscard]]
-std::optional<QString> extract_color_thumbnail(std::string const& filePath)
-{
-    using namespace std::literals;
-
-    // Open container
-    AVFormatContext* rawFmt = nullptr;
-    if (avformat_open_input(&rawFmt, filePath.c_str(), nullptr, nullptr) < 0) {
-        qWarning() << "[Thumbnail] Failed to open:" << QString::fromStdString(filePath);
-        return std::nullopt;
-    }
-    FormatCtxPtr fmtCtx(rawFmt, &free_format_ctx);
-
-    if (avformat_find_stream_info(fmtCtx.get(), nullptr) < 0) {
-        qWarning() << "[Thumbnail] Could not read stream info:"
-                   << QString::fromStdString(filePath);
-        return std::nullopt;
-    }
-
-    // Locate video stream
-    int videoStreamIdx = -1;
-    AVCodec const* codec = nullptr;
-    AVCodecParameters* codecParams = nullptr;
-
-    for (unsigned i = 0; i < fmtCtx->nb_streams && videoStreamIdx == -1; ++i) {
-        AVStream* st = fmtCtx->streams[i];
-        if (st && st->codecpar && st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-            if (AVCodec const* c = avcodec_find_decoder(st->codecpar->codec_id)) {
-                codec = c;
-                codecParams = st->codecpar;
-                videoStreamIdx = static_cast<int>(i);
-            }
-        }
-    }
-
-    if (videoStreamIdx < 0) {
-        qWarning() << "[Thumbnail] No video stream in" << QString::fromStdString(filePath);
-        return std::nullopt;
-    }
-
-    // Set up decoder
-    CodecCtxPtr codecCtx(avcodec_alloc_context3(codec), &free_codec_ctx);
-    if (!codecCtx || avcodec_parameters_to_context(codecCtx.get(), codecParams) < 0) {
-        qWarning() << "[Thumbnail] Failed to create decoder for"
-                   << QString::fromStdString(filePath);
-        return std::nullopt;
-    }
-
-    if (avcodec_open2(codecCtx.get(), codec, nullptr) < 0) {
-        qWarning() << "[Thumbnail] Failed to open codec for"
-                   << QString::fromStdString(filePath);
-        return std::nullopt;
-    }
-
-    // Seek to ~1 second
-    AVStream* vStream = fmtCtx->streams[videoStreamIdx];
-    AVRational tbase = vStream->time_base;
-    int64_t const oneSecondPts = static_cast<int64_t>(1.0 / av_q2d(tbase));
-
-    auto try_seek = [&](int flags) {
-        return avformat_seek_file(fmtCtx.get(), videoStreamIdx,
-                   0, oneSecondPts, oneSecondPts, flags)
-            >= 0;
-    };
-
-    if (!try_seek(AVSEEK_FLAG_BACKWARD))
-        if (!try_seek(AVSEEK_FLAG_ANY))
-            av_seek_frame(fmtCtx.get(), videoStreamIdx, 0, AVSEEK_FLAG_BACKWARD);
-
-    avcodec_flush_buffers(codecCtx.get());
-
-    // Set up scaler to RGB
-    constexpr int kThumbW = 128;
-    constexpr int kThumbH = 128;
-    constexpr AVPixelFormat outPixFmt = AV_PIX_FMT_RGB24;
-
-    SwsContextPtr swsCtx(
-        sws_getContext(codecCtx->width, codecCtx->height,
-            codecCtx->pix_fmt,
-            kThumbW, kThumbH, outPixFmt,
-            SWS_BILINEAR, nullptr, nullptr, nullptr),
-        &free_sws_ctx);
-    if (!swsCtx) {
-        qWarning() << "[Thumbnail] sws_getContext failed for"
-                   << QString::fromStdString(filePath);
-        return std::nullopt;
-    }
-
-    sws_setColorspaceDetails(swsCtx.get(),
-        sws_getCoefficients(SWS_CS_DEFAULT),
-        codecCtx->color_range == AVCOL_RANGE_JPEG ? 1 : 0,
-        sws_getCoefficients(SWS_CS_DEFAULT),
-        0, 0, 1, 1);
-
-    // Allocate frames and packet
-    FramePtr srcFrame(av_frame_alloc(), &free_frame);
-    FramePtr rgbFrame(av_frame_alloc(), &free_frame);
-    PacketPtr pkt(av_packet_alloc(), &free_packet);
-
-    int const bufSize = av_image_get_buffer_size(outPixFmt, kThumbW, kThumbH, 1);
-    std::vector<uint8_t> rgbBuf(static_cast<size_t>(bufSize));
-    av_image_fill_arrays(rgbFrame->data, rgbFrame->linesize,
-        rgbBuf.data(), outPixFmt,
-        kThumbW, kThumbH, 1);
-
-    // Decode and scale one frame
-    while (av_read_frame(fmtCtx.get(), pkt.get()) >= 0) {
-        if (pkt->stream_index != videoStreamIdx) {
-            av_packet_unref(pkt.get());
-            continue;
-        }
-
-        if (pkt->size <= 0) {
-            spdlog::warn("[Thumbnail] Skipping invalid packet size: {}", pkt->size);
-            av_packet_unref(pkt.get());
-            continue;
-        }
-
-        if (avcodec_send_packet(codecCtx.get(), pkt.get()) < 0) {
-            av_packet_unref(pkt.get());
-            continue;
-        }
-        av_packet_unref(pkt.get());
-
-        while (avcodec_receive_frame(codecCtx.get(), srcFrame.get()) >= 0) {
-            sws_scale(swsCtx.get(),
-                srcFrame->data, srcFrame->linesize,
-                0, codecCtx->height,
-                rgbFrame->data, rgbFrame->linesize);
-
-            // Convert to QImage
-            QImage img(kThumbW, kThumbH, QImage::Format_RGB888);
-            for (int y = 0; y < kThumbH; ++y) {
-                std::memcpy(img.scanLine(y),
-                    rgbFrame->data[0] + y * rgbFrame->linesize[0],
-                    kThumbW * 3);
-            }
-
-            // Save thumbnail
-            QString base = QFileInfo(QString::fromStdString(filePath)).baseName();
-            QString hash = hashPath(QString::fromStdString(filePath));
-            QDir outDir(QDir::current().filePath("thumbnails"));
-            outDir.mkpath(".");
-
-            QString thumbPath = outDir.filePath(base + "_" + hash.left(8) + "_thumb.jpg");
-
-            if (img.save(thumbPath, "JPEG"))
-                return thumbPath;
-
-            qWarning() << "[Thumbnail] Failed to save image at" << thumbPath;
-            return std::nullopt;
-        }
-    }
-
-    qWarning() << "[Thumbnail] No decodable frame found in"
-               << QString::fromStdString(filePath);
-    return std::nullopt;
+    spdlog::info("[decode] Extracted {} hashes from '{}'", hashes.size(), file);
+    return hashes;
 }

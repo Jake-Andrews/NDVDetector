@@ -2,6 +2,7 @@
 #include "SearchSettings.h"
 #include "VideoInfo.h"
 
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <filesystem>
@@ -10,7 +11,6 @@
 #include <spdlog/spdlog.h>
 #include <string>
 #include <system_error>
-#include <unordered_set>
 #include <vector>
 
 #if defined(_WIN32)
@@ -136,8 +136,9 @@ getVideosFromPath(std::filesystem::path const& root, SearchSettings const& cfg)
             return static_cast<char>(std::tolower(c));
         });
 
-        if (!cfg.extensions.empty() && !cfg.extensions.contains(ext))
+        if (!cfg.extensions.empty() && std::find(cfg.extensions.begin(), cfg.extensions.end(), ext) == cfg.extensions.end()) {
             return;
+        }
 
         // --- size test ---
         std::error_code szErr;

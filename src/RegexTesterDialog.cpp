@@ -102,4 +102,3 @@ void RegexTesterDialog::updateMatchState()
     m_statusLabel->setText(matched ? tr("✅  Match") : tr("✗  No match"));
     m_statusLabel->setStyleSheet(matched ? "color:green;font-weight:bold" : "color:grey;font-weight:bold");
 }
-

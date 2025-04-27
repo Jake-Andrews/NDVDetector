@@ -29,6 +29,8 @@ open_format_context(std::string const& file_path)
 
 bool extract_info(VideoInfo& out)
 {
+    spdlog::debug("Extracting info for path: {}", out.path);
+
     if (!std::filesystem::exists(out.path)) {
         spdlog::error("[FFmpeg] File does not exist: {}", out.path);
         return false;

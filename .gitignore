@@ -2,6 +2,7 @@
 build/
 videos/
 videos_copy/
+test_videos/
 thumbnails/
 *.db
 *.png

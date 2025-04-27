@@ -1,6 +1,11 @@
-file(GLOB_RECURSE SOURCES
+file(GLOB_RECURSE CPP_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.ui"
+)
+
+set(SOURCES
+    ${CPP_SOURCES}
+    ${CMAKE_CURRENT_SOURCE_DIR}/libplacebo_libav.c
 )
 
 qt_add_executable(NDVDetector
@@ -16,6 +21,7 @@ target_include_directories(NDVDetector PRIVATE
 
 target_link_libraries(NDVDetector PRIVATE
     ${LIBAV_LDFLAGS}
+    PkgConfig::PLACEBO
     pHash
     SQLite::SQLite3
     hftrie
@@ -23,8 +29,6 @@ target_link_libraries(NDVDetector PRIVATE
     Qt6::OpenGL
     Qt6::Gui
     spdlog::spdlog
-    nlohmann_json
+    nlohmann_json::nlohmann_json   
 )
-
-qt_finalize_executable(NDVDetector)
 
