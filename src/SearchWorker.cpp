@@ -7,10 +7,12 @@
 
 #include <QDebug>
 #include <filesystem>
+#include <functional>
 #include <spdlog/spdlog.h>
 #include <unordered_set>
 
 static constexpr double kSkipPercent = 0.15;
+static constexpr int kMaxFrames = 5;
 
 SearchWorker::SearchWorker(DatabaseManager& db,
     SearchSettings cfg,
@@ -82,49 +84,100 @@ void SearchWorker::process()
 // ─────────────────────────────────────────────────────────────
 void SearchWorker::doExtractionAndDetection(std::vector<VideoInfo>& videos)
 {
+    // Initialize counters and flags
     int hashedCount = 0;
     int totalToHash = static_cast<int>(videos.size());
 
     // Step A – metadata / thumbnail / initial DB insert
+    spdlog::info("Thumbnail/FFprobe started");
+
     std::erase_if(videos, [&](VideoInfo& v) {
         if (!extract_info(v)) {
             spdlog::warn("[meta] Failed FFprobe extraction – skipping '{}'", v.path);
             return true;
         }
 
-        if (auto opt = extract_color_thumbnail(v.path))
-            v.thumbnail_path = opt->toStdString();
-        else
+        // Try to extract thumbnail
+        try {
+            if (auto opt = extract_color_thumbnail(v.path))
+                v.thumbnail_path = opt->toStdString();
+            else
+                v.thumbnail_path = "./sneed.png"; // fallback logo
+        } catch (std::exception const& ex) {
+            spdlog::error("[thumbnail] Exception during thumbnail extraction: {}", ex.what());
             v.thumbnail_path = "./sneed.png"; // fallback logo
+        }
 
+        // Try to insert into database
         if (auto id = m_db.insertVideo(v)) {
             v.id = *id;
             return false;
         }
+
         spdlog::error("[DB] Inserting metadata failed for '{}'", v.path);
         return true;
     });
 
+    spdlog::info("Thumbnail/FFprobe finished");
+    spdlog::info("Hashing started");
+
     // Step B – pHash extraction & DB insertion
     for (auto const& v : videos) {
-        auto phashes = extract_phashes_from_video(
-            v.path,
-            kSkipPercent,
-            v.duration,
-            m_cfg.hwBackend,
-            100);
+        try {
+            spdlog::info("[hash] Processing '{}'", v.path);
 
-        if (phashes.empty()) {
-            spdlog::warn("[hash] No hashes generated for '{}'", v.path);
-        } else if (!m_db.insertAllHashes(v.id, phashes)) {
-            spdlog::error("[DB] Failed to insert {} hashes for '{}'",
-                phashes.size(), v.path);
-        } else {
-            spdlog::debug("[hash] Stored {} hashes for '{}'",
-                phashes.size(), v.path);
+            // HW decoding is enabled unless the UI forced "CPU-only"
+            bool allowHW = (m_cfg.hwBackend != AV_HWDEVICE_TYPE_NONE);
+
+            // Create a capture for the progress callback to avoid capturing 'this' by reference
+            auto progressCallback = [worker = this, currentHashedCount = hashedCount,
+                                        totalVideos = totalToHash](int pct) {
+                // Forward fine-grained 0-100 information to the GUI thread safely
+                QMetaObject::invokeMethod(
+                    worker,
+                    [=] {
+                        worker->emit hashingProgress(currentHashedCount * 100 + pct, totalVideos * 100);
+                    },
+                    Qt::QueuedConnection);
+            };
+
+            // Extract perceptual hashes with our improved function
+            auto phashes = extract_phashes_from_video(
+                v.path,
+                kSkipPercent,    // skip first 15%
+                v.duration,      // let EGL/GL pick stream time-base
+                kMaxFrames,      // hash at most 400 frames
+                allowHW,         // use HW if available
+                progressCallback // thread-safe progress reporting
+            );
+
+            // Handle the results
+            if (phashes.empty()) {
+                spdlog::warn("[hash] No hashes generated for '{}'", v.path);
+            } else if (!m_db.insertAllHashes(v.id, phashes)) {
+                spdlog::error("[DB] Failed to insert {} hashes for '{}'",
+                    phashes.size(), v.path);
+            } else {
+                spdlog::info("[hash] Successfully stored {} hashes for '{}'",
+                    phashes.size(), v.path);
+            }
+        } catch (std::exception const& ex) {
+            spdlog::error("[worker] Exception while processing '{}': {}", v.path, ex.what());
+        } catch (...) {
+            spdlog::error("[worker] Unknown exception while processing '{}'", v.path);
         }
 
+        // Update progress counter safely
         ++hashedCount;
-        emit hashingProgress(hashedCount, totalToHash);
+
+        // Notify UI of progress (this is safe to call from any thread with Qt)
+        QMetaObject::invokeMethod(
+            this,
+            [this, hashedCount, totalToHash] {
+                emit hashingProgress(hashedCount * 100, totalToHash * 100);
+            },
+            Qt::QueuedConnection);
     }
+
+    spdlog::info("Hashing finished: {} videos processed", hashedCount);
 }

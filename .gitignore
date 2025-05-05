@@ -4,5 +4,7 @@ videos/
 videos_copy/
 test_videos/
 thumbnails/
+venv/
 *.db
 *.png
+text.txt

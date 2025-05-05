@@ -396,6 +396,8 @@ SearchSettings MainWindow::collectSearchSettings() const
 
     // hardware
     auto hw_usable = [](AVHWDeviceType t) -> bool {
+        if (t == AV_HWDEVICE_TYPE_DRM)
+            return false;
         AVBufferRef* raw = nullptr;
         bool const ok = av_hwdevice_ctx_create(&raw, t, nullptr, nullptr, 0) >= 0;
         av_buffer_unref(&raw);
@@ -403,10 +405,17 @@ SearchSettings MainWindow::collectSearchSettings() const
     };
 
     auto choose_backend = [&](GPUVendor vendor) -> AVHWDeviceType {
-        for (auto const& entry : make_priority_list(vendor)) {
+        std::vector<std::pair<std::string, AVHWDeviceType>> list = make_priority_list(vendor);
+
+        // Prefer DRM first for AMD/Intel since it enables zero-copy with VAAPI
+        if (vendor == GPUVendor::AMD || vendor == GPUVendor::Intel)
+            list.insert(list.begin(), { "", AV_HWDEVICE_TYPE_DRM });
+
+        for (auto const& entry : list) {
             AVHWDeviceType dev = entry.second;
             if (dev == AV_HWDEVICE_TYPE_NONE)
                 break; // sentinel
+
             spdlog::info("[HW] probing {}", av_hwdevice_get_type_name(dev));
             if (hw_usable(dev)) {
                 spdlog::info("[HW] using {}", av_hwdevice_get_type_name(dev));

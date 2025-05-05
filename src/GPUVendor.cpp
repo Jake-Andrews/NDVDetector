@@ -1,56 +1,63 @@
 #include "GPUVendor.h"
 
-#include <QGuiApplication>
-#include <QOffscreenSurface>
-#include <QOpenGLContext>
-#include <QOpenGLFunctions>
+#include <EGL/egl.h>
 #include <cstring>
 
 extern "C" {
 #include <libavutil/hwcontext.h>
 }
 
-static GPUVendor detect_via_opengl()
+static GPUVendor detect_via_egl()
 {
-    if (!QGuiApplication::instance())
+    EGLDisplay dpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    if (dpy == EGL_NO_DISPLAY || !eglInitialize(dpy, nullptr, nullptr))
         return GPUVendor::Unknown;
-    QOpenGLContext ctx;
-    if (!ctx.create())
+
+    char const* vendor = eglQueryString(dpy, EGL_VENDOR);
+    eglTerminate(dpy);
+
+    if (!vendor)
         return GPUVendor::Unknown;
-    QOffscreenSurface surf;
-    surf.setFormat(ctx.format());
-    surf.create();
-    if (!ctx.makeCurrent(&surf))
-        return GPUVendor::Unknown;
-    char const* vend = reinterpret_cast<char const*>(ctx.functions()->glGetString(GL_VENDOR));
-    ctx.doneCurrent();
-    if (!vend)
-        return GPUVendor::Unknown;
-    if (strstr(vend, "NVIDIA"))
+    if (strstr(vendor, "NVIDIA"))
         return GPUVendor::Nvidia;
-    if (strstr(vend, "AMD") || strstr(vend, "ATI"))
+    if (strstr(vendor, "AMD") || strstr(vendor, "Mesa") || strstr(vendor, "RADV"))
         return GPUVendor::AMD;
-    if (strstr(vend, "Intel"))
+    if (strstr(vendor, "Intel"))
         return GPUVendor::Intel;
-    if (strstr(vend, "Apple"))
+    if (strstr(vendor, "Apple"))
         return GPUVendor::Apple;
+
     return GPUVendor::Unknown;
 }
 
-GPUVendor detect_gpu() { return detect_via_opengl(); }
+GPUVendor detect_gpu()
+{
+    return detect_via_egl();
+}
 
-std::vector<std::pair<std::string, AVHWDeviceType>> make_priority_list(GPUVendor v)
+// Maps GPU vendor to preferred FFmpeg HWDeviceType and name
+std::vector<std::pair<std::string, AVHWDeviceType>> make_priority_list(GPUVendor vendor)
 {
     using Pair = std::pair<std::string, AVHWDeviceType>;
-    switch (v) {
+
+    switch (vendor) {
     case GPUVendor::Nvidia:
-        return { Pair { "_cuvid", AV_HWDEVICE_TYPE_CUDA }, Pair { "", AV_HWDEVICE_TYPE_NONE } };
+        return {
+            Pair { "_cuvid", AV_HWDEVICE_TYPE_CUDA },
+            Pair { "", AV_HWDEVICE_TYPE_NONE }
+        };
+
     case GPUVendor::AMD:
-        return { Pair { "", AV_HWDEVICE_TYPE_VAAPI }, Pair { "", AV_HWDEVICE_TYPE_NONE } };
     case GPUVendor::Intel:
-        return { Pair { "_qsv", AV_HWDEVICE_TYPE_QSV }, Pair { "", AV_HWDEVICE_TYPE_VAAPI }, Pair { "", AV_HWDEVICE_TYPE_NONE } };
+        return {
+            Pair { "", AV_HWDEVICE_TYPE_VAAPI },
+            Pair { "", AV_HWDEVICE_TYPE_NONE }
+        };
+
     default:
-        return { Pair { "", AV_HWDEVICE_TYPE_NONE } };
+        return {
+            Pair { "", AV_HWDEVICE_TYPE_NONE }
+        };
     }
 }
 

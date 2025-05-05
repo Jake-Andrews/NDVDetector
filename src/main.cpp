@@ -4,19 +4,65 @@
 #include "VideoController.h"
 
 #include <QApplication>
+#include <QCoreApplication>
 #include <QMessageBox>
+#include <QtGui/QOffscreenSurface>
+#include <QtGui/QOpenGLContext>
+#include <QtGui/QSurfaceFormat>
+#include <spdlog/spdlog.h>
 
 int main(int argc, char* argv[])
 {
+    // ---- Force libva to load the Mesa radeonsi backend no matter the host distro ----
+    // setenv("LIBVA_DRIVER_NAME", "radeonsi", 1);                       // don’t overwrite if user sets it
+    // setenv("LIBVA_DRIVERS_PATH", "/usr/lib/x06_64-linux-gnu/dri", 1); // path that actually contains radeonsi_drv_video.so
+
+    spdlog::info("[VAAPI] DRIVER={} PATH={}",
+        getenv("LIBVA_DRIVER_NAME"), getenv("LIBVA_DRIVERS_PATH"));
+
+    QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
     QApplication app(argc, argv);
 
+    // -- Setup dummy GUI-side OpenGL context for sharing with workers --
+    QSurfaceFormat fmt;
+    fmt.setMajorVersion(4);
+    fmt.setMinorVersion(3);
+    fmt.setProfile(QSurfaceFormat::CoreProfile);
+    QSurfaceFormat::setDefaultFormat(fmt);
+
+    QOffscreenSurface surface;
+    surface.setFormat(fmt);
+    surface.setScreen(QApplication::primaryScreen());
+    surface.create();
+
+    QOpenGLContext guiCtx;
+    guiCtx.setFormat(fmt);
+    guiCtx.create();
+    guiCtx.makeCurrent(&surface);
+
+    guiCtx.makeCurrent(&surface);
+
+    // logs OpenGL version
+    if (QOpenGLContext::currentContext()) {
+        GLubyte const* version = glGetString(GL_VERSION);
+        GLubyte const* renderer = glGetString(GL_RENDERER);
+        GLubyte const* vendor = glGetString(GL_VENDOR);
+        if (version && renderer && vendor) {
+            qDebug("OpenGL Context Created:\n  Version:  %s\n  Renderer: %s\n  Vendor:   %s",
+                version, renderer, vendor);
+        } else {
+            qWarning("Failed to query OpenGL context info");
+        }
+    }
+
+    // -- Qt meta types for signal/slot compatibility --
     qRegisterMetaType<MainWindow::DeleteOptions>("MainWindow::DeleteOptions");
     qRegisterMetaType<MainWindow::SelectOptions>("MainWindow::SelectOptions");
     qRegisterMetaType<MainWindow::SortOptions>("MainWindow::SortOptions");
 
+    // -- App setup --
     DatabaseManager db("videos.db");
     VideoController controller(db);
-
     MainWindow w;
     controller.setModel(w.model());
 
@@ -32,7 +78,6 @@ int main(int argc, char* argv[])
         &controller, &VideoController::loadDatabase);
     QObject::connect(&w, &MainWindow::databaseCreateRequested,
         &controller, &VideoController::createDatabase);
-
     QObject::connect(&controller, &VideoController::databaseOpened,
         &w, &MainWindow::setCurrentDatabase);
 
