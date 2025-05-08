@@ -8,3 +8,4 @@ venv/
 *.db
 *.png
 text.txt
+requirements.txt

@@ -1,3 +1,4 @@
+// GLContext.cpp
 #include "GLContext.h"
 
 #define GL_GLEXT_PROTOTYPES
@@ -78,33 +79,38 @@ void GLContext::makeCurrent()
     if (!eglMakeCurrent(m_display, m_surface, m_surface, m_context))
         checkEgl("eglMakeCurrent");
 
-    // Initialise GLEW once per thread‑local context
+    // Initialise GLEW **once per thread‑local context**.
+    // (GLEW caches function pointers captured from the *current* context.)
     static thread_local bool glewOk = false;
     if (!glewOk) {
-        glewExperimental = GL_TRUE; // enable core‑profile entry points
+        glewExperimental = GL_TRUE; // core profile entry‑points
         GLenum err = glewInit();
-        if (err != GLEW_OK) {
-            spdlog::error("[GL] glewInit() → 0x{:x} ({})",
-                err, reinterpret_cast<char const*>(glewGetErrorString(err)));
-            char const* vendor = reinterpret_cast<char const*>(glGetString(GL_VENDOR));
-            char const* renderer = reinterpret_cast<char const*>(glGetString(GL_RENDERER));
-            char const* version = reinterpret_cast<char const*>(glGetString(GL_VERSION));
-            spdlog::error("[GL] vendor='{}' renderer='{}' version='{}'",
-                vendor ? vendor : "NULL",
-                renderer ? renderer : "NULL",
-                version ? version : "NULL");
-            throw std::runtime_error("GLEW initialisation on EGL context failed");
-        } else {
-            spdlog::info("[GL] Context ready: {} / {} / {}",
-                reinterpret_cast<char const*>(glGetString(GL_VENDOR)),
-                reinterpret_cast<char const*>(glGetString(GL_RENDERER)),
-                reinterpret_cast<char const*>(glGetString(GL_VERSION)));
-        }
+        if (err != GLEW_OK)
+            throw std::runtime_error(fmt::format(
+                "glewInit failed (0x{:x} {})",
+                err, reinterpret_cast<char const*>(glewGetErrorString(err))));
+
+        spdlog::info("[GL] GLEW initialised (vendor='{}'  renderer='{}'  version='{}')",
+            reinterpret_cast<char const*>(glGetString(GL_VENDOR)),
+            reinterpret_cast<char const*>(glGetString(GL_RENDERER)),
+            reinterpret_cast<char const*>(glGetString(GL_VERSION)));
+        glewOk = true;
+
+        /* Bind a tiny throw‑away texture now that GLEW is initialized */
+        GLuint tmpTex;
+        glGenTextures(1, &tmpTex);
+        glBindTexture(GL_TEXTURE_2D, tmpTex);
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_R8, 1, 1);
+        glDeleteTextures(1, &tmpTex);
     }
 
     // Verify required EGL dma‑buf extensions
+    static thread_local bool loggedExt = false; // ❶  initialise here
     char const* eglExt = eglQueryString(m_display, EGL_EXTENSIONS);
-    spdlog::info("[EGL] extensions: {}", eglExt ? eglExt : "(null)");
+    if (!loggedExt) {
+        spdlog::info("[EGL] extensions: {}", eglExt ? eglExt : "(null)");
+        loggedExt = true;
+    }
     if (!eglExt || !strstr(eglExt, "EGL_EXT_image_dma_buf_import") || !strstr(eglExt, "EGL_EXT_image_dma_buf_import_modifiers"))
         throw std::runtime_error(
             "EGL_EXT_image_dma_buf_import(_modifiers) missing – driver can't import dma‑bufs");

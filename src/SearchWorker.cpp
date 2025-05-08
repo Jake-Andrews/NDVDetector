@@ -12,7 +12,7 @@
 #include <unordered_set>
 
 static constexpr double kSkipPercent = 0.15;
-static constexpr int kMaxFrames = 5;
+static constexpr int kMaxFrames = 50;
 
 SearchWorker::SearchWorker(DatabaseManager& db,
     SearchSettings cfg,
@@ -66,7 +66,7 @@ void SearchWorker::process()
         // ── 4. Duplicate detection & persistence ──────────────
         auto all = m_db.getAllVideos();
         auto hashes = m_db.getAllHashGroups();
-        auto groups = findDuplicates(std::move(all), hashes, 4, 5);
+        auto groups = findDuplicates(std::move(all), hashes, 4, 10);
         m_db.storeDuplicateGroups(groups);
 
         emit finished(std::move(groups));

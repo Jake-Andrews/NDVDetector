@@ -1,233 +1,496 @@
-// SPDX‑License‑Identifier: MIT
-// luma_extractor.cpp – format‑agnostic, VA‑API‑accelerated luma scaler
-// ---------------------------------------------------------------
-// • Accepts *any* VA‑API decoded pixel format (NV12, P010, RGB32, etc.)
-// • If the format already has an explicit luma plane (YUV / grayscale)
-//      ‑ imports only the Y plane via dma‑buf → EGLImage → GL_R* texture
-// • If the format is RGB* (no luma plane)
-//      ‑ imports full RGB texture and shader converts to luma on‑the‑fly
-// • Always renders to a 128×128 GL_R8 FBO and writes frame_XX.png
-// • First 10 frames only, for hashing workflows
-// ---------------------------------------------------------------
-// Build (pkg‑config):
-//    c++ -std=c++17 -Wall -O2 luma_extractor.cpp -o extract \
-//        $(pkg-config --cflags --libs libavformat libavcodec libavutil \
-//                     egl libva libva-drm x11 gl) -ldl
-// ---------------------------------------------------------------
+//  Import an AVFrame produced by a VA‑API decoder into OpenGL, extract its
+//  luma, down‑sample to 32 × 32 and copy the result into users memory
+//
+//  Handles (every)? VA‑API DRM_PRIME format that Mesa/Intel exposes:
+//      ‑ NV12 / P010 / P016 / YUY2 … → imports Y‑plane only.
+//      ‑ ARGB / ABGR / XRGB …        → imports full RGB and converts in GLSL.
+//
+//  Works on 8‑/10‑/16‑bit inputs
+//  Zero exceptions, caller checks the boolean return
+//  and optionally inspects the thread‑local last_error()
+//
+// LumaExtractor.cpp — VAAPI → DRM_PRIME → EGL → OpenGL luma‑extraction pipeline
+
+#include "LumaExtractor.h"
+#include "GLContext.h"
+
+#include <GL/glew.h>
 
 #include <cstdint>
-#include <cstdio>
-#include <cstdlib>
-#include <fcntl.h>
-#include <string>
+#include <errno.h>
+#include <functional>
+#include <mutex>
+#include <spdlog/spdlog.h>
+#include <string.h>
 #include <unistd.h>
+#include <utility>
+
+extern "C" {
+#include <libavutil/frame.h>
+#include <libavutil/pixdesc.h>
+#include <va/va.h>
 #include <va/va_drmcommon.h>
-#include <vector>
+}
 
-#include <X11/Xlib.h>
-
-#define GL_GLEXT_PROTOTYPES
+#define EGL_EGLEXT_PROTOTYPES
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GL/gl.h>
-#include <GL/glext.h>
 
-extern "C" {
-#include <libavcodec/avcodec.h>
-#include <libavformat/avformat.h>
-#include <libavutil/hwcontext.h>
-#include <libavutil/hwcontext_vaapi.h>
-#include <libavutil/pixdesc.h>
-#include <va/va.h>
-#include <va/va_drm.h>
-}
+namespace lumaext {
 
-#include <drm_fourcc.h>
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
-
-static void die(const char* m)
+inline char const* to_string(Err e) noexcept
 {
-    std::fprintf(stderr, "fatal: %s\n", m);
-    std::exit(1);
+    switch (e) {
+    case Err::Ok:
+        return "Ok";
+    case Err::NotInitialised:
+        return "NotInitialised";
+    case Err::UnsupportedFormat:
+        return "UnsupportedFormat";
+    case Err::EGLCreateFailed:
+        return "EGLCreateFailed";
+    case Err::GLImportFailed:
+        return "GLImportFailed";
+    case Err::FboIncomplete:
+        return "FboIncomplete";
+    default:
+        return "Unknown";
+    }
 }
 
-/* minimal off‑screen GL context (hidden 1×1 X11 window) */
-struct GLContext {
-    Display* d {};
-    Window w {};
-    EGLDisplay ed {};
-    EGLContext ctx {};
-    GLContext()
+namespace {
+thread_local Err g_last_err = Err::Ok;
+}
+
+inline void _set_err(Err e) noexcept { g_last_err = e; }
+inline Err last_error() noexcept { return g_last_err; }
+
+namespace _detail {
+
+constexpr int kTileW = 32;
+constexpr int kTileH = 32;
+
+// RAII helper for original VA DRM_PRIME FDs
+struct OriginalVADRMPRIMEfdsCloser {
+    VADRMPRIMESurfaceDescriptor& desc_ref;
+    bool enabled { true };
+
+    explicit OriginalVADRMPRIMEfdsCloser(VADRMPRIMESurfaceDescriptor& d) noexcept
+        : desc_ref(d)
     {
-        d = XOpenDisplay(nullptr);
-        if (!d)
-            die("XOpenDisplay");
-        w = XCreateSimpleWindow(d, DefaultRootWindow(d), 0, 0, 1, 1, 0, 0, 0);
-        ed = eglGetDisplay((EGLNativeDisplayType)d);
-        if (ed == EGL_NO_DISPLAY)
-            die("eglGetDisplay");
-        if (!eglInitialize(ed, nullptr, nullptr))
-            die("eglInit");
-        if (!eglBindAPI(EGL_OPENGL_API))
-            die("eglBindAPI");
-        EGLint ca[] = { EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT, EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RED_SIZE, 8, EGL_NONE };
-        EGLConfig cfg;
-        EGLint n;
-        eglChooseConfig(ed, ca, &cfg, 1, &n);
-        EGLint ctxattr[] = { EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT, EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 3, EGL_NONE };
-        ctx = eglCreateContext(ed, cfg, EGL_NO_CONTEXT, ctxattr);
-        if (ctx == EGL_NO_CONTEXT)
-            die("ctx");
-        eglMakeCurrent(ed, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx);
     }
-    ~GLContext()
+
+    OriginalVADRMPRIMEfdsCloser(OriginalVADRMPRIMEfdsCloser const&) = delete;
+    OriginalVADRMPRIMEfdsCloser& operator=(OriginalVADRMPRIMEfdsCloser const&) = delete;
+    OriginalVADRMPRIMEfdsCloser(OriginalVADRMPRIMEfdsCloser&&) = delete;
+    OriginalVADRMPRIMEfdsCloser& operator=(OriginalVADRMPRIMEfdsCloser&&) = delete;
+
+    ~OriginalVADRMPRIMEfdsCloser()
     {
-        eglMakeCurrent(ed, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-        eglDestroyContext(ed, ctx);
-        eglTerminate(ed);
-        XDestroyWindow(d, w);
-        XCloseDisplay(d);
+        if (!enabled)
+            return;
+
+        for (uint32_t i = 0; i < desc_ref.num_objects; ++i) {
+            int& fd = desc_ref.objects[i].fd;
+            if (fd >= 0) {
+                if (::close(fd) != 0) {
+                    spdlog::warn("[lumaext] OriginalVADRMPRIMEfdsCloser: failed to close fd {}: {}", fd, strerror(errno));
+                }
+                fd = -1; // mark as closed to avoid accidental reuse
+            }
+        }
     }
+
+    void release() noexcept { enabled = false; }
 };
 
-static GLuint compile(GLenum t, char const* src)
+struct Texture final {
+    GLuint id { 0 };
+    explicit Texture(GLenum target)
+    {
+        glGenTextures(1, &id);
+        if (id)
+            glBindTexture(target, id);
+        else
+            spdlog::error("[Texture] glGenTextures failed");
+    }
+    ~Texture()
+    {
+        if (id)
+            glDeleteTextures(1, &id);
+    }
+    Texture(Texture&& o) noexcept
+        : id(std::exchange(o.id, 0))
+    {
+    }
+    Texture& operator=(Texture&& o) noexcept
+    {
+        std::swap(id, o.id);
+        return *this;
+    }
+    Texture(Texture const&) = delete;
+    Texture& operator=(Texture const&) = delete;
+};
+
+struct Framebuffer final {
+    GLuint id { 0 };
+    Framebuffer() { glGenFramebuffers(1, &id); }
+    ~Framebuffer()
+    {
+        if (id)
+            glDeleteFramebuffers(1, &id);
+    }
+    Framebuffer(Framebuffer&& o) noexcept
+        : id(std::exchange(o.id, 0))
+    {
+    }
+    Framebuffer& operator=(Framebuffer&& o) noexcept
+    {
+        std::swap(id, o.id);
+        return *this;
+    }
+    Framebuffer(Framebuffer const&) = delete;
+    Framebuffer& operator=(Framebuffer const&) = delete;
+};
+
+struct EglImage final {
+    EGLDisplay dpy { EGL_NO_DISPLAY };
+    EGLImage img { EGL_NO_IMAGE_KHR };
+    int owned_fd { -1 };
+
+    EglImage() = default;
+    EglImage(EGLDisplay d, EGLImage i, int fd = -1)
+        : dpy(d)
+        , img(i)
+        , owned_fd(fd)
+    {
+    }
+
+    ~EglImage()
+    {
+        if (img != EGL_NO_IMAGE_KHR && dpy != EGL_NO_DISPLAY) {
+            auto eglDestroyImageKHR = reinterpret_cast<PFNEGLDESTROYIMAGEKHRPROC>(eglGetProcAddress("eglDestroyImageKHR"));
+            if (eglDestroyImageKHR)
+                eglDestroyImageKHR(dpy, img);
+            else
+                spdlog::error("[EglImage] eglDestroyImageKHR symbol not found");
+        }
+        if (owned_fd >= 0) {
+            if (::close(owned_fd) != 0)
+                spdlog::error("[EglImage] close({}) failed: {}", owned_fd, strerror(errno));
+        }
+    }
+
+    EglImage(EglImage&& o) noexcept
+        : dpy(o.dpy)
+        , img(std::exchange(o.img, EGL_NO_IMAGE_KHR))
+        , owned_fd(std::exchange(o.owned_fd, -1))
+    {
+        o.dpy = EGL_NO_DISPLAY;
+    }
+    EglImage& operator=(EglImage&& o) noexcept
+    {
+        if (this == &o)
+            return *this;
+        // destroy current resources first
+        this->~EglImage();
+        dpy = o.dpy;
+        img = std::exchange(o.img, EGL_NO_IMAGE_KHR);
+        owned_fd = std::exchange(o.owned_fd, -1);
+        o.dpy = EGL_NO_DISPLAY;
+        return *this;
+    }
+
+    EglImage(EglImage const&) = delete;
+    EglImage& operator=(EglImage const&) = delete;
+};
+
+inline GLuint compile(GLenum type, char const* src)
 {
-    GLuint s = glCreateShader(t);
+    GLuint s = glCreateShader(type);
+    if (!s) {
+        spdlog::error("[compile] glCreateShader failed");
+        return 0;
+    }
     glShaderSource(s, 1, &src, nullptr);
     glCompileShader(s);
-    GLint ok;
+    GLint ok = 0;
     glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
-    if (!ok)
-        die("shader");
+    if (!ok) {
+        char log[512] = {};
+        GLsizei len = 0;
+        glGetShaderInfoLog(s, sizeof log, &len, log);
+        spdlog::error("[compile] shader compilation failed: {}", len ? log : "unknown error");
+        glDeleteShader(s);
+        return 0;
+    }
     return s;
 }
-static GLuint make_prog()
-{
-    char const* vs = "#version 330 core\nconst vec2 p[4]=vec2[](vec2(-1,1),vec2(1,1),vec2(-1,-1),vec2(1,-1));const vec2 tc[4]=vec2[](vec2(0,0),vec2(1,0),vec2(0,1),vec2(1,1));out vec2 v;void main(){gl_Position=vec4(p[gl_VertexID],0,1);v=tc[gl_VertexID];}";
-    // FS chooses path by uniform flag rgbMode
-    char const* fs = "#version 330 core\nin vec2 v;out vec4 C;uniform sampler2D tex0;uniform bool rgbMode;\nvoid main(){float y;if(rgbMode){vec3 rgb=texture(tex0,v).rgb;y=dot(rgb,vec3(0.2126,0.7152,0.0722));}else{y=texture(tex0,v).r;}C=vec4(y,y,y,1);}";
-    GLuint p = glCreateProgram();
-    glAttachShader(p, compile(GL_VERTEX_SHADER, vs));
-    glAttachShader(p, compile(GL_FRAGMENT_SHADER, fs));
-    glLinkProgram(p);
-    GLint ok;
-    glGetProgramiv(p, GL_LINK_STATUS, &ok);
-    if (!ok)
-        die("link");
-    glUseProgram(p);
-    glUniform1i(glGetUniformLocation(p, "tex0"), 0);
-    GLuint vao;
-    glGenVertexArrays(1, &vao);
-    glBindVertexArray(vao);
-    return p;
-}
 
-int main(int argc, char** argv)
-{
-    if (argc < 2) {
-        std::fprintf(stderr, "usage: %s <video> [renderD]", argv[0]);
-        return 2;
+// singleton GL assets
+class GLModule {
+    GLuint prog { 0 };
+    GLint rgbLoc { -1 }, texLoc { -1 }, texelSizeLoc { -1 };
+    GLuint vao { 0 };
+
+    bool initialized { false };
+    std::mutex initMutex;
+    std::unique_ptr<GLuint, std::function<void(GLuint*)>> rTex_id;
+    std::unique_ptr<GLuint, std::function<void(GLuint*)>> fbo_id;
+
+    GLModule()
+        : rTex_id(new GLuint(0), [](GLuint* id) { if (*id) glDeleteTextures(1, id); delete id; })
+        , fbo_id(new GLuint(0), [](GLuint* id) { if (*id) glDeleteFramebuffers(1, id); delete id; })
+    {
     }
-    char const* devnode = (argc > 2) ? argv[2] : "/dev/dri/renderD128";
 
-    // -------- ffmpeg & VA‑API init ----------
-    AVFormatContext* ic = nullptr;
-    if (avformat_open_input(&ic, argv[1], nullptr, nullptr) < 0)
-        die("open");
-    if (avformat_find_stream_info(ic, nullptr) < 0)
-        die("info");
-    int vs = av_find_best_stream(ic, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-    if (vs < 0)
-        die("vs");
-    AVCodec const* dec = avcodec_find_decoder(ic->streams[vs]->codecpar->codec_id);
-    AVCodecContext* ctx = avcodec_alloc_context3(dec);
-    avcodec_parameters_to_context(ctx, ic->streams[vs]->codecpar);
-    int drmfd = open(devnode, O_RDWR);
-    if (drmfd < 0)
-        die("drm");
-    VADisplay vdisp = vaGetDisplayDRM(drmfd);
-    int mj, mn;
-    if (vaInitialize(vdisp, &mj, &mn))
-        die("va");
-    AVBufferRef* hwdev = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_VAAPI);
-    reinterpret_cast<AVHWDeviceContext*>(hwdev->data)->hwctx->display = vdisp;
-    if (av_hwdevice_ctx_init(hwdev) < 0)
-        die("hwdev");
-    ctx->hw_device_ctx = av_buffer_ref(hwdev);
-    ctx->get_format = [](AVCodecContext*, const enum AVPixelFormat* f) {while(*f){if(*f==AV_PIX_FMT_VAAPI)return AV_PIX_FMT_VAAPI;++f;}return AV_PIX_FMT_NONE; };
-    if (avcodec_open2(ctx, dec, nullptr) < 0)
-        die("open2");
+public:
+    ~GLModule()
+    {
+        if (vao)
+            glDeleteVertexArrays(1, &vao);
+        if (prog)
+            glDeleteProgram(prog);
+    }
 
-    // ------------ GL ---------------
-    GLContext gl;
-    make_prog();
-    GLint rgbLoc = glGetUniformLocation(0, "rgbMode");
-    GLuint tex;
-    glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
+    static GLModule& instance()
+    {
+        static GLModule m;
+        return m;
+    }
+
+    bool ensureInitialized();
+    bool bindAndSetup(bool rgbLike, int sourceWidth, int sourceHeight);
+    GLuint getOutputTexture() const { return *rTex_id; }
+    GLuint getFramebuffer() const { return *fbo_id; }
+};
+
+bool GLModule::ensureInitialized()
+{
+    std::lock_guard<std::mutex> lk(initMutex);
+    if (initialized)
+        return true;
+
+    // shader sources
+    static constexpr char vsSrc[] = R"GLSL(#version 330 core
+const vec2 p[4]=vec2[](vec2(-1,1),vec2(1,1),vec2(-1,-1),vec2(1,-1));
+const vec2 t[4]=vec2[](vec2(0,0),vec2(1,0),vec2(0,1),vec2(1,1));
+out vec2 v; void main(){ gl_Position=vec4(p[gl_VertexID],0,1); v=t[gl_VertexID]; })GLSL";
+
+    static constexpr char fsSrc[] = R"GLSL(#version 330 core
+in vec2 v; out vec4 C;
+uniform sampler2D tex0; uniform bool rgbMode; uniform vec2 texelSize;
+float applyMeanFilter(sampler2D tex, vec2 tc, vec2 px, bool rgb){
+    float sum=0.0; const int f=7, h=f/2; for(int y=-h;y<=h;++y) for(int x=-h;x<=h;++x){
+        vec2 off=vec2(x,y)*px; vec4 t=texture(tex,tc+off);
+        float l=rgb?dot(t.rgb,vec3(0.2126,0.7152,0.0722)):t.r; sum+=l; }
+    return sum/float(f*f);
+}
+void main(){ float y=applyMeanFilter(tex0,v,texelSize,rgbMode); C=vec4(y,y,y,1.0);} )GLSL";
+
+    prog = glCreateProgram();
+    if (!prog) {
+        spdlog::error("[GLModule] glCreateProgram failed");
+        return false;
+    }
+    GLuint vs = compile(GL_VERTEX_SHADER, vsSrc);
+    GLuint fs = compile(GL_FRAGMENT_SHADER, fsSrc);
+    if (!vs || !fs) {
+        glDeleteProgram(prog);
+        prog = 0;
+        return false;
+    }
+    glAttachShader(prog, vs);
+    glAttachShader(prog, fs);
+    glLinkProgram(prog);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    GLint linked = 0;
+    glGetProgramiv(prog, GL_LINK_STATUS, &linked);
+    if (!linked) {
+        char log[512] = {};
+        GLsizei len = 0;
+        glGetProgramInfoLog(prog, 512, &len, log);
+        spdlog::error("[GLModule] link failed: {}", log);
+        glDeleteProgram(prog);
+        prog = 0;
+        return false;
+    }
+
+    rgbLoc = glGetUniformLocation(prog, "rgbMode");
+    texLoc = glGetUniformLocation(prog, "tex0");
+    texelSizeLoc = glGetUniformLocation(prog, "texelSize");
+    if (texLoc >= 0) {
+        glUseProgram(prog);
+        glUniform1i(texLoc, 0);
+    }
+
+    // output R8 texture
+    glGenTextures(1, rTex_id.get());
+    glBindTexture(GL_TEXTURE_2D, *rTex_id);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, kTileW, kTileH, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    GLuint fbo, outTex;
-    glGenTextures(1, &outTex);
-    glBindTexture(GL_TEXTURE_2D, outTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, 128, 128, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
-    glGenFramebuffers(1, &fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, outTex, 0);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-        die("fbo");
 
-    // --- EGL helpers ---
-    auto eglCreateImageKHR = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
-    auto eglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
-    auto glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
-
-    AVPacket pkt;
-    AVFrame* frm = av_frame_alloc();
-    int n = 0;
-    while (n < 10 && av_read_frame(ic, &pkt) >= 0) {
-        if (pkt.stream_index != vs) {
-            av_packet_unref(&pkt);
-            continue;
-        }
-        avcodec_send_packet(ctx, &pkt);
-        av_packet_unref(&pkt);
-        if (avcodec_receive_frame(ctx, frm) != 0)
-            continue;
-        vaSyncSurface(vdisp, (VASurfaceID)(uintptr_t)frm->data[3]);
-
-        AVPixFmtDescriptor const* desc = av_pix_fmt_desc_get((AVPixelFormat)frm->format);
-        bool rgb = (desc->flags & AV_PIX_FMT_FLAG_RGB);
-
-        // --- dma‑buf import ---
-        VASurfaceID s = (VASurfaceID)(uintptr_t)frm->data[3];
-        VADRMPRIMESurfaceDescriptor d {};
-        if (vaExportSurfaceHandle(vdisp, s, VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2, VA_EXPORT_SURFACE_SEPARATE_LAYERS, &d))
-            die("export");
-        EGLImage img;
-        uint32_t fourcc = rgb ? d.layers[0].drm_format : d.layers[0].drm_format;
-        EGLint attr[] = { EGL_LINUX_DRM_FOURCC_EXT, (EGLint)fourcc, EGL_WIDTH, (EGLint)d.width, EGL_HEIGHT, (EGLint)d.height, EGL_DMA_BUF_PLANE0_FD_EXT, d.objects[d.layers[0].object_index[0]].fd, EGL_DMA_BUF_PLANE0_OFFSET_EXT, (EGLint)d.layers[0].offset[0], EGL_DMA_BUF_PLANE0_PITCH_EXT, (EGLint)d.layers[0].pitch[0], EGL_NONE };
-        img = eglCreateImageKHR(gl.edpy, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, nullptr, attr);
-        glBindTexture(GL_TEXTURE_2D, tex);
-        glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, img);
-        glUniform1i(rgbLoc, rgb);
-
-        // render
-        glViewport(0, 0, 128, 128);
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        std::vector<uint8_t> buf(128 * 128);
-        glReadPixels(0, 0, 128, 128, GL_RED, GL_UNSIGNED_BYTE, buf.data());
-        char name[32];
-        std::snprintf(name, sizeof(name), "gray_%02d.png", n);
-        stbi_write_png(name, 128, 128, 1, buf.data(), 128);
-        std::printf("saved %s (rgbMode=%d)\n", name, rgb);
-
-        eglDestroyImageKHR(gl.edpy, img);
-        ::close(d.objects[d.layers[0].object_index[0]].fd);
-        av_frame_unref(frm);
-        ++n;
+    // framebuffer
+    glGenFramebuffers(1, fbo_id.get());
+    glBindFramebuffer(GL_FRAMEBUFFER, *fbo_id);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, *rTex_id, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        spdlog::error("[GLModule] FBO incomplete");
+        return false;
     }
-    std::puts("done");
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    glGenVertexArrays(1, &vao);
+    initialized = true;
+    return true;
 }
+
+bool GLModule::bindAndSetup(bool rgbLike, int w, int h)
+{
+    if (!initialized)
+        return false;
+    glUseProgram(prog);
+    if (rgbLoc >= 0)
+        glUniform1i(rgbLoc, rgbLike ? 1 : 0);
+    if (texelSizeLoc >= 0)
+        glUniform2f(texelSizeLoc, 1.f / float(w), 1.f / float(h));
+    glBindFramebuffer(GL_FRAMEBUFFER, *fbo_id);
+    glViewport(0, 0, kTileW, kTileH);
+    glBindVertexArray(vao);
+    return true;
+}
+
+} // namespace _detail
+
+// public entry point
+
+bool extract_luma_32x32(GLContext& glCtx, VADisplay va, AVFrame const* frame, std::uint8_t* dst) noexcept
+{
+    using namespace _detail;
+    _set_err(Err::Ok);
+
+    try {
+        glCtx.makeCurrent();
+        if (!frame || !dst) {
+            _set_err(Err::NotInitialised);
+            return false;
+        }
+
+        AVPixFmtDescriptor const* pd = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(frame->format));
+        if (!pd) {
+            _set_err(Err::UnsupportedFormat);
+            return false;
+        }
+        bool const rgbLike = pd->flags & AV_PIX_FMT_FLAG_RGB;
+
+        // ---- export VA surface ----
+        auto sid = static_cast<VASurfaceID>(reinterpret_cast<uintptr_t>(frame->data[3]));
+        if (vaSyncSurface(va, sid) != VA_STATUS_SUCCESS) {
+            _set_err(Err::UnsupportedFormat);
+            return false;
+        }
+        VADRMPRIMESurfaceDescriptor desc {};
+        if (vaExportSurfaceHandle(va, sid, VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2, VA_EXPORT_SURFACE_SEPARATE_LAYERS, &desc) != VA_STATUS_SUCCESS) {
+            _set_err(Err::UnsupportedFormat);
+            return false;
+        }
+        OriginalVADRMPRIMEfdsCloser fdGuard(desc);
+        if (!desc.num_layers || !desc.layers[0].num_planes)
+            return false;
+        int const plane = 0;
+        int const obj = desc.layers[0].object_index[plane];
+        if (obj < 0 || obj >= static_cast<int>(desc.num_objects))
+            return false;
+
+        uint64_t const badMod = (1ull << 56) - 1;
+        uint64_t const modifier = desc.objects[obj].drm_format_modifier;
+        bool const haveMod = (modifier && modifier != badMod);
+
+        // ---- build EGL attribute list ----
+        EGLint attr[19];
+        int ai = 0;
+        auto push = [&](EGLint k, EGLint v) { attr[ai++] = k; attr[ai++] = v; };
+        push(EGL_LINUX_DRM_FOURCC_EXT, static_cast<EGLint>(desc.layers[0].drm_format));
+        push(EGL_WIDTH, desc.width);
+        push(EGL_HEIGHT, desc.height);
+        int dupFd = ::dup(desc.objects[obj].fd);
+        if (dupFd < 0) {
+            _set_err(Err::EGLCreateFailed);
+            return false;
+        }
+        push(EGL_DMA_BUF_PLANE0_FD_EXT, dupFd);
+        push(EGL_DMA_BUF_PLANE0_OFFSET_EXT, static_cast<EGLint>(desc.layers[0].offset[plane]));
+        push(EGL_DMA_BUF_PLANE0_PITCH_EXT, static_cast<EGLint>(desc.layers[0].pitch[plane]));
+        if (haveMod) {
+            push(EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, static_cast<EGLint>(modifier & 0xffffffffu));
+            push(EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT, static_cast<EGLint>(modifier >> 32));
+        }
+        attr[ai] = EGL_NONE;
+
+        // ---- create EGL image ----
+        auto eglCreateImageKHR = reinterpret_cast<PFNEGLCREATEIMAGEKHRPROC>(eglGetProcAddress("eglCreateImageKHR"));
+        auto glEGLImageTargetTexture2DOES = reinterpret_cast<PFNGLEGLIMAGETARGETTEXTURE2DOESPROC>(eglGetProcAddress("glEGLImageTargetTexture2DOES"));
+        if (!eglCreateImageKHR || !glEGLImageTargetTexture2DOES) {
+            _set_err(Err::NotInitialised);
+            ::close(dupFd);
+            return false;
+        }
+
+        EglImage img(glCtx.display(), eglCreateImageKHR(glCtx.display(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, nullptr, attr), dupFd);
+        if (img.img == EGL_NO_IMAGE_KHR) {
+            _set_err(Err::EGLCreateFailed);
+            return false;
+        }
+
+        // ---- GL setup ----
+        GLuint srcTex = 0;
+        glGenTextures(1, &srcTex);
+        glBindTexture(GL_TEXTURE_2D, srcTex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, img.img);
+        if (glGetError() != GL_NO_ERROR) {
+            glDeleteTextures(1, &srcTex);
+            _set_err(Err::GLImportFailed);
+            return false;
+        }
+
+        auto& mod = GLModule::instance();
+        if (!mod.ensureInitialized() || !mod.bindAndSetup(rgbLike, desc.width, desc.height)) {
+            glDeleteTextures(1, &srcTex);
+            _set_err(Err::NotInitialised);
+            return false;
+        }
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, srcTex);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        if (glGetError() != GL_NO_ERROR) {
+            glDeleteTextures(1, &srcTex);
+            _set_err(Err::GLImportFailed);
+            return false;
+        }
+
+        glFinish();
+        glReadPixels(0, 0, _detail::kTileW, _detail::kTileH, GL_RED, GL_UNSIGNED_BYTE, dst);
+        if (glGetError() != GL_NO_ERROR) {
+            glDeleteTextures(1, &srcTex);
+            _set_err(Err::GLImportFailed);
+            return false;
+        }
+
+        glDeleteTextures(1, &srcTex);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        return true;
+
+    } catch (...) {
+        _set_err(Err::GLImportFailed);
+        return false;
+    }
+}
+
+} // namespace lumaext

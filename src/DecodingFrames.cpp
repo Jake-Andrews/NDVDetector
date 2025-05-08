@@ -1,5 +1,7 @@
+// DecodingFrames.cpp
 #include "DecodingFrames.h"
 #include "GLContext.h"
+#include "LumaExtractor.h"
 #include "Mean32PipelineGL.h"
 #include "PHashCPU.h"
 
@@ -251,72 +253,37 @@ static std::vector<uint64_t> decode_and_hash_hw_gl(std::string const& file,
     // Main decode loop
     FrmPtr frm(av_frame_alloc());
     PktPtr pkt(av_packet_alloc());
-    int last_pct = -1;
+    int lastPct = -1;
 
-    while ((max_frames <= 0 || int(hashes.size()) < max_frames) && av_read_frame(fmt.get(), pkt.get()) >= 0) {
+    while ((max_frames <= 0 || (int)hashes.size() < max_frames) && av_read_frame(fmt.get(), pkt.get()) >= 0) {
         if (pkt->stream_index != vstream) {
             av_packet_unref(pkt.get());
             continue;
         }
         avcodec_send_packet(codec.get(), pkt.get());
         av_packet_unref(pkt.get());
-
         while (avcodec_receive_frame(codec.get(), frm.get()) == 0) {
-            // Export surface as DRM_PRIME
-            VADRMPRIMESurfaceDescriptor d {};
-            VASurfaceID sid = (VASurfaceID)(uintptr_t)frm->data[3];
-            vaSyncSurface(va_dpy, sid);
-            if (vaExportSurfaceHandle(va_dpy, sid,
-                    VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2,
-                    VA_EXPORT_SURFACE_SEPARATE_LAYERS, &d)) {
-                av_frame_unref(frm.get());
-                continue;
+
+            GLContext& gl_ctx = tl.api();
+
+            if (lumaext::extract_luma_32x32(gl_ctx, va_dpy,
+                    frm.get(), gray.data())) {
+                if (auto h = compute_phash_from_preprocessed(gray.data()))
+                    hashes.push_back(*h);
             }
 
-            // EGLImage import of luma
-            int const fd = dup(d.objects[d.layers[0].object_index[0]].fd);
-            int const pitch = d.layers[0].pitch[0];
-            int const offset = d.layers[0].offset[0];
-            auto const fourcc = d.layers[0].drm_format;
-
-            EGLint const attr[] = {
-                EGL_LINUX_DRM_FOURCC_EXT, static_cast<EGLint>(fourcc),
-                EGL_WIDTH, static_cast<EGLint>(d.width),
-                EGL_HEIGHT, static_cast<EGLint>(d.height),
-                EGL_DMA_BUF_PLANE0_FD_EXT, fd,
-                EGL_DMA_BUF_PLANE0_PITCH_EXT, pitch,
-                EGL_DMA_BUF_PLANE0_OFFSET_EXT, offset,
-                EGL_NONE
-            };
-            auto eglCreateImageKHR = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
-            auto eglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
-            EGLImageKHR img = eglCreateImageKHR(tl.api().display(), EGL_NO_CONTEXT,
-                EGL_LINUX_DMA_BUF_EXT, nullptr, attr);
-            if (img != EGL_NO_IMAGE_KHR) {
-                pipe.process(img, gray.data());
-                eglDestroyImageKHR(tl.api().display(), img);
-
-                if (auto h = compute_phash_cpu(gray.data(), constants::kOutW, constants::kOutH)) {
-                    hashes.push_back(*h);
-
-                    if (max_frames > 0) {
-                        int pct = int(hashes.size() * 100 / max_frames);
-                        if (pct != last_pct && pct <= 100) {
-                            report_progress(progress, pct);
-                            last_pct = pct;
-                        }
-                    }
+            av_frame_unref(frm.get());
+            if (max_frames > 0 && (int)hashes.size() >= max_frames)
+                break;
+            if (max_frames > 0) {
+                int pct = int(hashes.size() * 100 / max_frames);
+                if (pct != lastPct) {
+                    progress(pct);
+                    lastPct = pct;
                 }
             }
-
-            close(fd);
-            av_frame_unref(frm.get());
-
-            if (max_frames > 0 && int(hashes.size()) >= max_frames)
-                break;
         }
     }
-
     return hashes;
 }
 
@@ -402,7 +369,7 @@ static std::vector<uint64_t> decode_and_hash_sw(
         spdlog::debug("[sw] Input format {} requires scaling to GRAY8", av_get_pix_fmt_name(codec_ctx->pix_fmt));
         swsCtx.reset(sws_getContext(codec_ctx->width, codec_ctx->height, codec_ctx->pix_fmt,
             codec_ctx->width, codec_ctx->height, AV_PIX_FMT_GRAY8, // Scale directly to gray
-            SWS_BILINEAR,
+            SWS_POINT,                                             // nearest neighbour
             nullptr, nullptr, nullptr));
         if (!swsCtx) {
             spdlog::error("[sw] Failed to create SwsContext for color conversion.");
@@ -505,7 +472,7 @@ static std::vector<uint64_t> decode_and_hash_sw(
             }
 
             // Compute hash
-            if (auto h = compute_phash_cpu(frame_to_hash->data[0], frame_to_hash->width, frame_to_hash->height)) {
+            if (auto h = compute_phash_full(frame_to_hash->data[0], frame_to_hash->width, frame_to_hash->height)) {
                 hashes.push_back(*h);
                 spdlog::debug("[sw] Stored hash {:016x} for frame pts {} (Total hashes: {})", *h, frm->pts, hashes.size());
 
@@ -557,7 +524,7 @@ static std::vector<uint64_t> decode_and_hash_sw(
                     gray_frame->data, gray_frame->linesize);
                 frame_to_hash = gray_frame.get();
             }
-            if (auto h = compute_phash_cpu(frame_to_hash->data[0], frame_to_hash->width, frame_to_hash->height)) {
+            if (auto h = compute_phash_full(frame_to_hash->data[0], frame_to_hash->width, frame_to_hash->height)) {
                 hashes.push_back(*h);
                 spdlog::debug("[sw] Stored hash {:016x} from flushed frame pts {} (Total hashes: {})", *h, frm->pts, hashes.size());
                 // Optionally update progress during flush too
