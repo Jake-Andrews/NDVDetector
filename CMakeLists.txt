@@ -55,7 +55,7 @@ find_package(OpenGL REQUIRED)
 find_package(SQLite3 REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(nlohmann_json REQUIRED CONFIG)
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui OpenGL)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui OpenGL Concurrent)
 qt_standard_project_setup()
 
 add_subdirectory(vendor/phash)

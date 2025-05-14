@@ -32,7 +32,7 @@ void SearchWorker::process()
     try {
         spdlog::info("[worker] Starting search task");
 
-        // ── 1. Enumerate video files ──────────────────────────
+        // 1. Enumerate video files
         std::vector<VideoInfo> allVideos;
 
         for (auto const& dir : m_cfg.directories) {
@@ -50,7 +50,7 @@ void SearchWorker::process()
         }
         emit filesFound(static_cast<int>(allVideos.size()));
 
-        // ── 2. Filter videos already known to the DB ───────────
+        // 2. Filter videos already known to the DB
         std::unordered_set<std::string> known;
         auto dbVideos = m_db.getAllVideos();
         known.reserve(dbVideos.size());
@@ -60,7 +60,7 @@ void SearchWorker::process()
         std::erase_if(allVideos, [&](VideoInfo const& v) { return known.contains(v.path); });
         spdlog::info("[worker] {} new videos to process", allVideos.size());
 
-        // ── 3. Metadata, thumbnails & DB insertion ─────────────
+        // 3. Metadata, thumbnails & DB insertion
         doExtractionAndDetection(allVideos);
 
         // ── 4. Duplicate detection & persistence ──────────────

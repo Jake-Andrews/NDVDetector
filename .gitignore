@@ -9,3 +9,5 @@ venv/
 *.png
 text.txt
 requirements.txt
+.aider*
+vendor/

@@ -13,14 +13,18 @@
 
 int main(int argc, char* argv[])
 {
-    // ---- Force libva to load the Mesa radeonsi backend no matter the host distro ----
-    // setenv("LIBVA_DRIVER_NAME", "radeonsi", 1);                       // don’t overwrite if user sets it
-    // setenv("LIBVA_DRIVERS_PATH", "/usr/lib/x06_64-linux-gnu/dri", 1); // path that actually contains radeonsi_drv_video.so
-
+    QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
     spdlog::info("[VAAPI] DRIVER={} PATH={}",
         getenv("LIBVA_DRIVER_NAME"), getenv("LIBVA_DRIVERS_PATH"));
 
-    QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
+    // QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
+
+    // Prevent Qt from loading the GTK platform-theme plugin (libqgtk3)
+    // which crashes inside gdk-pixbuf when QFileDialog is used
+    qputenv("QT_QPA_PLATFORMTHEME", QByteArray("none"));
+    QGuiApplication::setDesktopSettingsAware(false);
+    QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
+
     QApplication app(argc, argv);
 
     // -- Setup dummy GUI-side OpenGL context for sharing with workers --
@@ -38,22 +42,22 @@ int main(int argc, char* argv[])
     QOpenGLContext guiCtx;
     guiCtx.setFormat(fmt);
     guiCtx.create();
-    guiCtx.makeCurrent(&surface);
-
-    guiCtx.makeCurrent(&surface);
-
-    // logs OpenGL version
-    if (QOpenGLContext::currentContext()) {
-        GLubyte const* version = glGetString(GL_VERSION);
-        GLubyte const* renderer = glGetString(GL_RENDERER);
-        GLubyte const* vendor = glGetString(GL_VENDOR);
-        if (version && renderer && vendor) {
-            qDebug("OpenGL Context Created:\n  Version:  %s\n  Renderer: %s\n  Vendor:   %s",
-                version, renderer, vendor);
-        } else {
-            qWarning("Failed to query OpenGL context info");
-        }
+    if (!guiCtx.makeCurrent(&surface)) {
+        qFatal("Failed to make OpenGL context current");
     }
+
+    // Log OpenGL version
+    GLubyte const* version = glGetString(GL_VERSION);
+    GLubyte const* renderer = glGetString(GL_RENDERER);
+    GLubyte const* vendor = glGetString(GL_VENDOR);
+    if (version && renderer && vendor) {
+        qDebug("OpenGL Context Created:\n  Version:  %s\n  Renderer: %s\n  Vendor:   %s",
+            version, renderer, vendor);
+    } else {
+        qWarning("Failed to query OpenGL context info");
+    }
+
+    guiCtx.doneCurrent(); // Release the context after initialization
 
     // -- Qt meta types for signal/slot compatibility --
     qRegisterMetaType<MainWindow::DeleteOptions>("MainWindow::DeleteOptions");
@@ -130,3 +134,5 @@ int main(int argc, char* argv[])
     w.show();
     return app.exec();
 }
+#include <QCoreApplication>
+#include <QGuiApplication> // for setDesktopSettingsAware()

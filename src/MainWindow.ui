@@ -1,24 +1,28 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
  <class>MainWindow</class>
+
  <widget class="QMainWindow" name="MainWindow">
   <property name="minimumSize">
-   <size>
-    <width>1000</width>
-    <height>600</height>
-   </size>
+   <size><width>1000</width><height>600</height></size>
   </property>
   <property name="windowTitle">
-   <string>NDVDetector - Video Info</string>
+   <string>NDVDetector – Video Info</string>
   </property>
+
   <widget class="QWidget" name="centralwidget">
-   <layout class="QVBoxLayout" name="verticalLayout">
+   <layout class="QVBoxLayout" name="centralLayout">
+
+    <!-- TAB‑WIDGET -->
     <item>
      <widget class="QTabWidget" name="tabWidget">
-      <!-- Videos Tab -->
+
+      <!-- VIDEOS tab  -->
       <widget class="QWidget" name="videosTab">
+       <attribute name="title"><string>Videos</string></attribute>
        <layout class="QVBoxLayout" name="videosLayout">
-        <!-- Collapsible Search Directories -->
+
+        <!-- ▼▼  collapsible directory section  ▼▼ -->
         <item>
          <layout class="QVBoxLayout" name="directorySectionLayout">
           <item>
@@ -35,37 +39,19 @@
             <layout class="QVBoxLayout" name="directoryPanelLayout">
              <item>
               <widget class="QTreeWidget" name="directoryListWidget">
-               <column>
-                <property name="text"><string>Directory</string></property>
-               </column>
-               <column>
-                <property name="text"><string>Recursive</string></property>
-               </column>
+               <column><property name="text"><string>Directory</string></property></column>
+               <column><property name="text"><string>Recursive</string></property></column>
                <property name="columnCount"><number>2</number></property>
               </widget>
              </item>
              <item>
-              <layout class="QHBoxLayout" name="horizontalLayoutDirActions">
-               <item>
-                <widget class="QLineEdit" name="directoryLineEdit">
-                 <property name="placeholderText"><string>Enter directory path manually...</string></property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QToolButton" name="pickDirectoryButton">
-                 <property name="text"><string>...</string></property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QPushButton" name="addDirectoryButton">
-                 <property name="text"><string>Add</string></property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QPushButton" name="removeDirectoryButton">
-                 <property name="text"><string>Remove Selected</string></property>
-                </widget>
-               </item>
+              <layout class="QHBoxLayout" name="dirButtons">
+               <item><widget class="QLineEdit"   name="directoryLineEdit">
+                 <property name="placeholderText"><string>Enter directory …</string></property>
+               </widget></item>
+               <item><widget class="QToolButton" name="pickDirectoryButton"><property name="text"><string>…</string></property></widget></item>
+               <item><widget class="QPushButton" name="addDirectoryButton"   ><property name="text"><string>Add</string></property></widget></item>
+               <item><widget class="QPushButton" name="removeDirectoryButton"><property name="text"><string>Remove Selected</string></property></widget></item>
               </layout>
              </item>
             </layout>
@@ -73,106 +59,42 @@
           </item>
          </layout>
         </item>
-        <!-- Table view -->
+
+
+        <!-- table of duplicate videos -->
+        <item><widget class="QTableView" name="tableView"><property name="sortingEnabled"><bool>true</bool></property></widget></item>
+
+        <!-- bottom row of buttons -->
         <item>
-         <widget class="QTableView" name="tableView">
-          <property name="sortingEnabled"><bool>true</bool></property>
-         </widget>
-        </item>
-        <!-- Bottom buttons -->
-        <item>
-         <layout class="QHBoxLayout" name="bottomButtonsLayout">
-          <item>
-           <widget class="QPushButton" name="searchButton">
-            <property name="text"><string>Search</string></property>
-            <property name="minimumSize"><size><width>100</width><height>40</height></size></property>
-           </widget>
-          </item>
+         <layout class="QHBoxLayout" name="bottomButtons">
+          <item><widget class="QPushButton" name="searchButton"><property name="text"><string>Search</string></property></widget></item>
           <item>
            <layout class="QHBoxLayout">
-            <item>
-             <widget class="QLabel" name="hwDecodeLabel">
-              <property name="text">
-               <string>HW Decoder:</string>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="QComboBox" name="hwDecodeComboBox">
-              <item>
-               <property name="text">
-                <string>Auto</string>
-               </property>
-              </item>
-              <item>
-               <property name="text">
-                <string>NVIDIA (NVDEC)</string>
-               </property>
-              </item>
-              <item>
-               <property name="text">
-                <string>Intel (QSV)</string>
-               </property>
-              </item>
-              <item>
-               <property name="text">
-                <string>AMD (VAAPI)</string>
-               </property>
-              </item>
-              <item>
-               <property name="text">
-                <string>CPU Only</string>
-               </property>
-              </item>
-             </widget>
-            </item>
+            <item><widget class="QLabel" name="hwDecodeLabel"><property name="text"><string>HW Decoder:</string></property></widget></item>
+            <item><widget class="QComboBox" name="hwDecodeComboBox">
+              <item><property name="text"><string>Auto</string></property></item>
+              <item><property name="text"><string>NVIDIA (NVDEC)</string></property></item>
+              <item><property name="text"><string>Intel (QSV)</string></property></item>
+              <item><property name="text"><string>AMD (VAAPI)</string></property></item>
+              <item><property name="text"><string>CPU Only</string></property></item>
+            </widget></item>
            </layout>
           </item>
-          <item>
-           <widget class="QPushButton" name="selectButton">
-            <property name="text"><string>Select</string></property>
-            <property name="minimumSize"><size><width>100</width><height>40</height></size></property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QPushButton" name="sortButton">
-            <property name="text"><string>Sort</string></property>
-            <property name="minimumSize"><size><width>100</width><height>40</height></size></property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QPushButton" name="sortGroupsButton">
-            <property name="text"><string>Sort Groups</string></property>
-            <property name="minimumSize"><size><width>100</width><height>40</height></size></property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QPushButton" name="deleteButton">
-            <property name="text"><string>Delete</string></property>
-            <property name="minimumSize"><size><width>100</width><height>40</height></size></property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QPushButton" name="hardlinkButton">
-            <property name="text"><string>Hardlink</string></property>
-            <property name="minimumSize"><size><width>100</width><height>40</height></size></property>
-            <property name="toolTip"><string>This will hardlink all selected videos to the first video in each group. Requires 2 or more selected videos per group.</string></property>
-           </widget>
-          </item>
-          <item>
-           <spacer name="horizontalSpacer">
-            <property name="orientation"><enum>Qt::Horizontal</enum></property>
-            <property name="sizeType"><enum>QSizePolicy::Expanding</enum></property>
-           </spacer>
-          </item>
+          <item><widget class="QPushButton" name="selectButton"      ><property name="text"><string>Select</string></property></widget></item>
+          <item><widget class="QPushButton" name="sortButton"        ><property name="text"><string>Sort</string></property></widget></item>
+          <item><widget class="QPushButton" name="sortGroupsButton"  ><property name="text"><string>Sort Groups</string></property></widget></item>
+          <item><widget class="QPushButton" name="deleteButton"      ><property name="text"><string>Delete</string></property></widget></item>
+          <item><widget class="QPushButton" name="hardlinkButton"    ><property name="text"><string>Hardlink</string></property></widget></item>
+          <item><spacer name="hsp"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeType"><enum>QSizePolicy::Expanding</enum></property></spacer></item>
          </layout>
         </item>
-       </layout>
-      </widget>
-      <attribute name="tabText"><string>Videos</string></attribute>
+
+       </layout><!-- videosLayout -->
+      </widget><!-- videosTab -->
 
       <!-- Settings Tab -->
       <widget class="QWidget" name="settingsTab">
+       <attribute name="title"><string>Settings</string></attribute>
        <layout class="QVBoxLayout" name="settingsLayout">
         <item>
          <widget class="QGroupBox" name="filtersGroup">
@@ -330,14 +252,53 @@
         </item>
        </layout>
       </widget>
-      <attribute name="tabText"><string>Settings</string></attribute>
-     </widget>
+
+      <!-- HARDWARE ACCEL tab -->
+      <widget class="QWidget" name="hardwareAccelTab">
+       <attribute name="title"><string>Hardware Accel</string></attribute>
+       <layout class="QVBoxLayout" name="hardwareAccelLayout">
+    
+        <!-- Hardware‑filter table -->
+        <item>
+          <widget class="QLabel" name="hardwareFilterLabel">
+            <property name="text">
+              <string>Hardware Acceleration Filter</string>
+            </property>
+            <property name="styleSheet">
+              <string>font-weight: bold; padding: 4px;</string>
+            </property>
+          </widget>
+        </item>
+        <item><widget class="QTableView" name="hardwareFilterView"><property name="sortingEnabled"><bool>true</bool></property></widget></item>
+    
+        <!-- control buttons between the tables -->
+        <item>
+         <layout class="QHBoxLayout">
+          <item><widget class="QPushButton" name="addVideoButton"     ><property name="text"><string>Add Video…</string></property></widget></item>
+          <item><spacer name="hardwareAccelSpacer2"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
+          <item><widget class="QLabel"       name="statusLabel" ><property name="text"><string>Idle</string></property></widget></item>
+          <item><widget class="QProgressBar" name="progressBar" ><property name="textVisible"><bool>false</bool></property></widget></item>
+          <item><spacer name="hardwareAccelSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
+          <item><widget class="QPushButton"  name="runButton"   ><property name="text"><string>Run Test</string></property></widget></item>
+         </layout>
+        </item>
+
+        <!-- Custom‑tests (video list) table -->
+        <item><widget class="QTableView" name="customTestsView"><property name="sortingEnabled"><bool>true</bool></property></widget></item>
+    
+       </layout>
+      </widget>
+
+     </widget><!-- QTabWidget -->
     </item>
-   </layout>
-  </widget>
+
+   </layout><!-- centralLayout -->
+  </widget><!-- centralwidget -->
+
   <widget class="QMenuBar" name="menubar"/>
   <widget class="QStatusBar" name="statusbar"/>
  </widget>
+
  <resources/>
  <connections/>
 </ui>
