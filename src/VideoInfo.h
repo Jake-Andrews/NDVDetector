@@ -11,6 +11,9 @@ struct VideoInfo {
     std::string modified_at;
     std::string video_codec;
     std::string audio_codec;
+    std::string pix_fmt; 
+    std::string profile; 
+    int level = 0; 
     int width = 0;
     int height = 0;
     int duration = 0;

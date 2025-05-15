@@ -17,6 +17,25 @@
 #include <QFileInfo>
 #include <spdlog/spdlog.h>
 
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+
+// saves frames to fs for debugging
+static constexpr bool kDumpFrames = true;
+
+static void write_pgm(std::filesystem::path const& file,
+    uint8_t const* data, int w, int h, int stride)
+{
+    std::ofstream os(file, std::ios::binary);
+    if (!os)
+        return;
+    os << "P5\n"
+       << w << ' ' << h << "\n255\n";
+    for (int y = 0; y < h; ++y)
+        os.write(reinterpret_cast<char const*>(data + y * stride), w);
+}
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -217,10 +236,12 @@ static std::vector<uint64_t> decode_and_hash_hw_gl(std::string const& file,
         return hashes;
     util::BufPtr hw_dev_ref(hw_dev);
 
-    CtxPtr codec(avcodec_alloc_context3(dec));
-    avcodec_parameters_to_context(codec.get(), st->codecpar);
-    codec->hw_device_ctx = av_buffer_ref(hw_dev);
-    codec->get_format = [](AVCodecContext*, AVPixelFormat const* l) -> AVPixelFormat {
+    CtxPtr codec_ctx { avcodec_alloc_context3(dec) };
+    if (avcodec_parameters_to_context(codec_ctx.get(), st->codecpar) < 0)
+        return {};
+
+    codec_ctx->hw_device_ctx = av_buffer_ref(hw_dev);
+    codec_ctx->get_format = [](AVCodecContext*, AVPixelFormat const* l) -> AVPixelFormat {
         while (*l != AV_PIX_FMT_NONE) {
             if (*l == AV_PIX_FMT_VAAPI)
                 return AV_PIX_FMT_VAAPI;
@@ -228,8 +249,14 @@ static std::vector<uint64_t> decode_and_hash_hw_gl(std::string const& file,
         }
         return AV_PIX_FMT_NONE;
     };
-    if (avcodec_open2(codec.get(), dec, nullptr) < 0)
+
+    /* decode only key-frames */
+    codec_ctx->skip_frame = AVDISCARD_NONKEY; // discard every non-key frame
+
+    if (avcodec_open2(codec_ctx.get(), dec, nullptr) < 0) {
+        spdlog::error("[ffmpeg-hw] failed to open HW decoder");
         return hashes;
+    }
 
     auto* devctx = reinterpret_cast<AVHWDeviceContext*>(hw_dev->data);
     auto* vactx = reinterpret_cast<AVVAAPIDeviceContext*>(devctx->hwctx);
@@ -239,6 +266,12 @@ static std::vector<uint64_t> decode_and_hash_hw_gl(std::string const& file,
     glpipe::Mean32PipelineGL pipe(tl.api());
     std::array<uint8_t, constants::kOutW * constants::kOutH> gray;
 
+    std::filesystem::path dumpDir;
+    if constexpr (kDumpFrames) {
+        dumpDir = std::filesystem::path("frames") / QFileInfo(QString::fromStdString(file)).completeBaseName().toStdString();
+        std::filesystem::create_directories(dumpDir);
+    }
+
     // Seek
     double pct = std::clamp(skip_pct, 0.0, 0.2);
     int64_t seek_pts = AV_NOPTS_VALUE;
@@ -246,7 +279,7 @@ static std::vector<uint64_t> decode_and_hash_hw_gl(std::string const& file,
         seek_pts = sec_to_pts(pct * duration_s, st->time_base);
         if (seek_pts > 0) {
             av_seek_frame(fmt.get(), vstream, seek_pts, AVSEEK_FLAG_BACKWARD);
-            avcodec_flush_buffers(codec.get());
+            avcodec_flush_buffers(codec_ctx.get());
         }
     }
 
@@ -256,18 +289,25 @@ static std::vector<uint64_t> decode_and_hash_hw_gl(std::string const& file,
     int lastPct = -1;
 
     while ((max_frames <= 0 || (int)hashes.size() < max_frames) && av_read_frame(fmt.get(), pkt.get()) >= 0) {
-        if (pkt->stream_index != vstream) {
-            av_packet_unref(pkt.get());
+        if (pkt->stream_index != vstream || !(pkt->flags & AV_PKT_FLAG_KEY)) {
+            av_packet_unref(pkt.get()); // skip non-video or non-key packets
             continue;
         }
-        avcodec_send_packet(codec.get(), pkt.get());
+        avcodec_send_packet(codec_ctx.get(), pkt.get());
         av_packet_unref(pkt.get());
-        while (avcodec_receive_frame(codec.get(), frm.get()) == 0) {
+        while (avcodec_receive_frame(codec_ctx.get(), frm.get()) == 0) {
 
             GLContext& gl_ctx = tl.api();
 
             if (lumaext::extract_luma_32x32(gl_ctx, va_dpy,
                     frm.get(), gray.data())) {
+                if constexpr (kDumpFrames) {
+                    std::ostringstream ss;
+                    ss << "hw_" << std::setw(6) << std::setfill('0') << hashes.size() << ".pgm";
+                    write_pgm(dumpDir / ss.str(), gray.data(),
+                        constants::kOutW, constants::kOutH,
+                        constants::kOutW); // packed 32 × 32
+                }
                 if (auto h = compute_phash_from_preprocessed(gray.data()))
                     hashes.push_back(*h);
             }
@@ -300,21 +340,21 @@ static std::vector<uint64_t> decode_and_hash_sw(
     spdlog::info("[sw] decoding '{}' (skip={}%, duration={} s, limit={})",
         file, skip_pct * 100, duration_s, max_frames);
 
+    /* ───────────────────────────── demuxer open ───────────────────────── */
     FmtPtr fmt;
     {
         AVDictionary* o = nullptr;
         av_dict_set_int(&o, "probesize", constants::kProbeSize, 0);
         av_dict_set_int(&o, "analyzeduration", constants::kAnalyzeUsec, 0);
         AVFormatContext* raw = nullptr;
-        if (int e = avformat_open_input(&raw, file.c_str(), nullptr, &o); e < 0) {
+        int e = avformat_open_input(&raw, file.c_str(), nullptr, &o);
+        av_dict_free(&o);
+        if (e < 0) {
             spdlog::error("[ffmpeg-sw] avformat_open_input: {}", ff_err2str(e));
-            av_dict_free(&o);
             return {};
         }
-        av_dict_free(&o);
         fmt.reset(raw);
     }
-
     if (int e = avformat_find_stream_info(fmt.get(), nullptr); e < 0) {
         spdlog::error("[ffmpeg-sw] stream_info: {}", ff_err2str(e));
         return {};
@@ -325,23 +365,21 @@ static std::vector<uint64_t> decode_and_hash_sw(
         spdlog::warn("[ffmpeg-sw] no video stream");
         return {};
     }
-
     AVStream* st = fmt->streams[vstream];
 
-    // **temporary, removed later, caller should filter videos with duration<0**
-    if (duration_s <= 0) {
-        if (st->duration != AV_NOPTS_VALUE) {
-            duration_s = static_cast<int>(st->duration * av_q2d(st->time_base));
-            spdlog::debug("[sw] Determined duration from stream: {} s", duration_s);
-        } else if (fmt->duration != AV_NOPTS_VALUE) {
-            duration_s = static_cast<int>(fmt->duration / AV_TIME_BASE);
-            spdlog::debug("[sw] Determined duration from container: {} s", duration_s);
-        } else {
-            duration_s = 0;
-            spdlog::warn("[sw] Could not determine video duration.");
-        }
+    /* ─────────────── determine/override duration (caller may give 0) ─── */
+    if (st->duration != AV_NOPTS_VALUE) {
+        duration_s = static_cast<int>(st->duration * av_q2d(st->time_base));
+        spdlog::debug("[sw] Determined duration from stream: {} s", duration_s);
+    } else if (fmt->duration != AV_NOPTS_VALUE) {
+        duration_s = static_cast<int>(fmt->duration / AV_TIME_BASE);
+        spdlog::debug("[sw] Determined duration from container: {} s", duration_s);
+    } else {
+        duration_s = 0;
+        spdlog::warn("[sw] Could not determine video duration.");
     }
 
+    /* ───────────────────────────── decoder open ───────────────────────── */
     AVCodec const* dec = avcodec_find_decoder(st->codecpar->codec_id);
     if (!dec) {
         spdlog::warn("[ffmpeg-sw] unsupported codec ID {}", static_cast<int>(st->codecpar->codec_id));
@@ -349,196 +387,201 @@ static std::vector<uint64_t> decode_and_hash_sw(
     }
 
     CtxPtr codec_ctx { avcodec_alloc_context3(dec) };
-    int err = 0;
-    if (!codec_ctx || (err = avcodec_parameters_to_context(codec_ctx.get(), st->codecpar)) < 0 || (err = avcodec_open2(codec_ctx.get(), dec, nullptr)) < 0) {
-        spdlog::error("[ffmpeg-sw] failed to open SW decoder: {}", ff_err2str(err));
+    if (!codec_ctx || avcodec_parameters_to_context(codec_ctx.get(), st->codecpar) < 0) {
+        spdlog::error("[ffmpeg-sw] avcodec_parameters_to_context failed");
         return {};
     }
 
-    // Enable multi-threading for SW decoding
-    codec_ctx->thread_type = FF_THREAD_SLICE; // Or FF_THREAD_FRAME
+    /* multithreading BEFORE avcodec_open2() */
+    codec_ctx->thread_type = FF_THREAD_SLICE;
     codec_ctx->thread_count = std::max(1u, std::thread::hardware_concurrency());
     spdlog::info("[sw] Using {} threads for SW decoding", codec_ctx->thread_count);
 
+    /* decode only key-frames */
+    codec_ctx->skip_frame = AVDISCARD_NONKEY; // discard every non-key frame
+
+    int err = avcodec_open2(codec_ctx.get(), dec, nullptr);
+    if (err < 0) {
+        spdlog::error("[ffmpeg-sw] avcodec_open2 failed: {}", ff_err2str(err));
+        return {};
+    }
+
+    /* ───────────────────── pre‑allocate frames/packets ────────────────── */
     FrmPtr frm { av_frame_alloc() };
     PktPtr pkt { av_packet_alloc() };
-    SwsPtr swsCtx; // For color conversion if needed
+    SwsPtr swsCtx;
 
-    // Setup scaler if input is not Grayscale
+    // Phash requires grayscale, need to convert if not already gray8
     if (codec_ctx->pix_fmt != AV_PIX_FMT_GRAY8) {
-        spdlog::debug("[sw] Input format {} requires scaling to GRAY8", av_get_pix_fmt_name(codec_ctx->pix_fmt));
+        // SWS_POINT is used by the official PHash algorithm
         swsCtx.reset(sws_getContext(codec_ctx->width, codec_ctx->height, codec_ctx->pix_fmt,
-            codec_ctx->width, codec_ctx->height, AV_PIX_FMT_GRAY8, // Scale directly to gray
-            SWS_POINT,                                             // nearest neighbour
-            nullptr, nullptr, nullptr));
+            codec_ctx->width, codec_ctx->height, AV_PIX_FMT_GRAY8,
+            SWS_POINT, nullptr, nullptr, nullptr));
         if (!swsCtx) {
-            spdlog::error("[sw] Failed to create SwsContext for color conversion.");
-            // Can we proceed without scaling? No, hash needs gray.
+            spdlog::error("[sw] Failed to create SwsContext → abort");
             return {};
         }
     } else {
         spdlog::debug("[sw] Input format is already GRAY8, no scaling needed.");
     }
 
-    // Prepare destination frame for Grayscale data
-    FrmPtr gray_frame { av_frame_alloc() };
-    if (!gray_frame) {
-        spdlog::error("[sw] Failed to allocate gray frame");
-        return {};
-    }
-    gray_frame->format = AV_PIX_FMT_GRAY8;
-    gray_frame->width = codec_ctx->width;
-    gray_frame->height = codec_ctx->height;
-    // Align buffer 32
-    if (av_frame_get_buffer(gray_frame.get(), 32) < 0) {
-        spdlog::error("[sw] Failed to get buffer for gray frame");
+    FrmPtr gray { av_frame_alloc() };
+    gray->format = AV_PIX_FMT_GRAY8;
+    gray->width = codec_ctx->width;
+    gray->height = codec_ctx->height;
+    if (av_frame_get_buffer(gray.get(), 32) < 0) {
+        spdlog::error("[sw] Failed to alloc gray buffer");
         return {};
     }
 
-    std::vector<uint64_t> hashes;
-    hashes.reserve(max_frames > 0 ? max_frames : 128);
-    int last_percent = -1;
-
-    // Seek logic
-    double pct = std::clamp(skip_pct, 0.0, 0.2);
-
-    // disable skip for small files
-    qint64 file_size = QFileInfo(QString::fromStdString(file)).size();
-    if ((duration_s > 0 && duration_s < 20) || file_size < 5 * 1024 * 1024) {
-        spdlog::info("[sw] Small file detected (duration {}s or size {} MiB), disabling skip_pct (was {}%)",
-            duration_s, file_size / (1024.0 * 1024.0), pct * 100);
+    /* ───────────────────────────── seeking logic ─────────────────────── */
+    double pct = std::clamp(skip_pct, 0.0, 0.20);
+    qint64 file_sz = QFileInfo(QString::fromStdString(file)).size();
+    if ((duration_s > 0 && duration_s < 20) || file_sz < 5 * 1024 * 1024) {
+        spdlog::info("[sw] small file → skip disabled (was {:.1f}%)", pct * 100);
         pct = 0.0;
     }
 
-    int64_t start_pts = AV_NOPTS_VALUE;
     if (duration_s > 0 && pct > 0.0) {
-        start_pts = sec_to_pts(pct * duration_s, st->time_base);
-        if (start_pts > 0) {
-            spdlog::info("[sw] Seeking to ~{:.1f}% (pts {})", pct * 100.0, start_pts);
-            if (avformat_seek_file(fmt.get(), vstream, INT64_MIN, start_pts, INT64_MAX, AVSEEK_FLAG_BACKWARD) >= 0) {
+        int64_t seek_pts = sec_to_pts(pct * duration_s, st->time_base);
+        if (seek_pts > 0) {
+            avformat_flush(fmt.get());
+            if (avformat_seek_file(fmt.get(), vstream, INT64_MIN, seek_pts, INT64_MAX, AVSEEK_FLAG_BACKWARD) >= 0) {
                 avcodec_flush_buffers(codec_ctx.get());
-                spdlog::info("[seek] Used avformat_seek_file to seek to start_pts={}", start_pts);
+                spdlog::info("[seek] jumped to {:.1f}%", pct * 100);
             } else {
-                spdlog::warn("[seek] avformat_seek_file failed, precise seek might not be possible. Decode will start from beginning or nearest keyframe.");
+                spdlog::warn("[seek] avformat_seek_file failed, decoding from start");
             }
-        } else {
-            spdlog::debug("[sw] Calculated seek point is 0 or negative, skipping seek.");
         }
     } else {
-        spdlog::debug("[sw] Initial skip percentage is 0 or duration unknown, not seeking.");
+        spdlog::debug("[sw] Initial skip percentage is 0 or duration unknown, skipping seeking.");
     }
 
+    /* ───────────────────── main decode / hash loop ───────────────────── */
+    std::vector<uint64_t> hashes;
+    hashes.reserve(max_frames > 0 ? max_frames : 128);
+
+    std::filesystem::path dumpDir;
+    if constexpr (kDumpFrames) {
+        dumpDir = std::filesystem::path("frames") / QFileInfo(QString::fromStdString(file)).completeBaseName().toStdString();
+        std::filesystem::create_directories(dumpDir);
+    }
+    int last_progress = -1;
     size_t frames_seen = 0;
-    bool stopped_early = false;
-    while (av_read_frame(fmt.get(), pkt.get()) >= 0) {
-        if (pkt->stream_index != vstream) {
+    bool stopped = false;
+    bool fatal_error = false;
+
+    while (!fatal_error && !stopped && av_read_frame(fmt.get(), pkt.get()) >= 0) {
+        if (pkt->stream_index != vstream || !(pkt->flags & AV_PKT_FLAG_KEY)) {
             av_packet_unref(pkt.get());
             continue;
         }
 
-        int send_ret = avcodec_send_packet(codec_ctx.get(), pkt.get());
-        // Packet is consumed or ref'd by send_packet, unref original now
-        av_packet_unref(pkt.get());
-
-        if (send_ret < 0 && send_ret != AVERROR(EAGAIN) && send_ret != AVERROR_EOF) {
-            spdlog::warn("[ffmpeg-sw] send_packet error: {}", ff_err2str(send_ret));
-        }
-        // Loop to receive all frames generated by the packet
-        while (true) {
-            int receive_ret = avcodec_receive_frame(codec_ctx.get(), frm.get());
-            if (receive_ret == AVERROR(EAGAIN) || receive_ret == AVERROR_EOF) {
-                break; // Need more input or EOF reached for this packet
-            } else if (receive_ret < 0) {
-                spdlog::warn("[ffmpeg-sw] receive_frame error: {}", ff_err2str(receive_ret));
-                break; // Error receiving frame, stop processing this packet's output
-            }
-
-            // Frame received successfully
-            frames_seen++;
-
-            AVFrame* frame_to_hash = frm.get();
-            // Perform scaling if needed
-            if (swsCtx) {
-                // spdlog::debug("[sw] Scaling frame pts {} from {} to GRAY8", frm->pts, av_pix_fmt_desc_get(frm->format));
-                int slice_h = sws_scale(swsCtx.get(), frm->data, frm->linesize, 0, frm->height,
-                    gray_frame->data, gray_frame->linesize);
-                if (slice_h != frm->height) {
-                    spdlog::warn("[sw] sws_scale did not process full height ({}/{}) for frame pts {}", slice_h, frm->height, frm->pts);
-                    // Continue anyway? Or skip hash?
-                }
-                frame_to_hash = gray_frame.get(); // Hash the gray frame
+        /* send the packet — retry once on EAGAIN */
+        bool packet_retained = true;
+        while (packet_retained) {
+            int sret = avcodec_send_packet(codec_ctx.get(), pkt.get());
+            if (sret == 0) {
+                av_packet_unref(pkt.get());
+                packet_retained = false; // ownership transferred
+            } else if (sret == AVERROR(EAGAIN)) {
+                // decoder is full → drain one batch then retry
+            } else if (sret == AVERROR_EOF) {
+                av_packet_unref(pkt.get());
+                packet_retained = false;
+                break; // codec already signalled EOF
             } else {
-                spdlog::debug("[sw] Hashing frame pts {} directly (format GRAY8)", frm->pts);
-            }
-
-            // Compute hash
-            if (auto h = compute_phash_full(frame_to_hash->data[0], frame_to_hash->width, frame_to_hash->height)) {
-                hashes.push_back(*h);
-                spdlog::debug("[sw] Stored hash {:016x} for frame pts {} (Total hashes: {})", *h, frm->pts, hashes.size());
-
-                if (max_frames > 0) {
-                    int current_pct = static_cast<int>(hashes.size() * 100 / max_frames);
-                    if (current_pct != last_percent && current_pct <= 100) { // Avoid spamming & >100%
-                        last_percent = current_pct;
-                        report_progress(on_progress, current_pct);
-                    }
-                }
-            } else {
-                spdlog::warn("[sw] compute_phash_cpu failed for frame pts {}", frm->pts);
-            }
-
-            av_frame_unref(frm.get()); // Unref the received frame
-
-            // Check limit
-            if (max_frames > 0 && static_cast<int>(hashes.size()) >= max_frames) {
-                spdlog::info("[sw] Reached max_frames limit ({}), stopping decode.", max_frames);
-                stopped_early = true;
-                break; // Break inner receive loop
-            }
-        } // End inner receive loop
-
-        if (stopped_early) {
-            break; // Break outer read loop
-        }
-    } // End outer read loop
-
-    // Flush SW decoder
-    if (!stopped_early) {
-        spdlog::info("[sw] Flushing SW decoder...");
-        int send_ret = avcodec_send_packet(codec_ctx.get(), nullptr); // Send flush signal
-        if (send_ret < 0 && send_ret != AVERROR_EOF) {
-            spdlog::warn("[ffmpeg-sw] send flush packet error: {}", ff_err2str(send_ret));
-        }
-        while (true) { // Loop to receive flushed frames
-            int receive_ret = avcodec_receive_frame(codec_ctx.get(), frm.get());
-            if (receive_ret == AVERROR(EAGAIN) || receive_ret == AVERROR_EOF) {
-                break; // Done flushing
-            } else if (receive_ret < 0) {
-                spdlog::warn("[ffmpeg-sw] receive flush frame error: {}", ff_err2str(receive_ret));
+                spdlog::warn("[ffmpeg-sw] send_packet: {}", ff_err2str(sret));
+                av_packet_unref(pkt.get());
+                fatal_error = true;
                 break;
             }
-            frames_seen++;
-            AVFrame* frame_to_hash = frm.get();
-            if (swsCtx) { // Scale if needed
-                sws_scale(swsCtx.get(), frm->data, frm->linesize, 0, frm->height,
-                    gray_frame->data, gray_frame->linesize);
-                frame_to_hash = gray_frame.get();
+
+            /* drain frames */
+            while (true) {
+                int rret = avcodec_receive_frame(codec_ctx.get(), frm.get());
+                if (rret == AVERROR(EAGAIN))
+                    break; // need more packets
+                if (rret == AVERROR_EOF)
+                    goto decode_done; // finished
+                if (rret < 0) {
+                    spdlog::warn("[ffmpeg-sw] receive_frame: {}", ff_err2str(rret));
+                    fatal_error = true;
+                    break;
+                }
+
+                // got a frame → process
+                ++frames_seen;
+                AVFrame* src = frm.get();
+                if (swsCtx) {
+                    int h = sws_scale(swsCtx.get(), frm->data, frm->linesize, 0, frm->height,
+                        gray->data, gray->linesize);
+                    if (h != frm->height)
+                        spdlog::warn("[sw] sws_scale short: {}/{}", h, frm->height);
+                    src = gray.get();
+                }
+
+                if constexpr (kDumpFrames) {
+                    // we dump the *original* (pre-mean / pre-resize) luma plane
+                    uint8_t const* dumpPlane = (codec_ctx->pix_fmt == AV_PIX_FMT_GRAY8)
+                        ? src->data[0]
+                        : gray->data[0];
+                    int dumpStride = (codec_ctx->pix_fmt == AV_PIX_FMT_GRAY8)
+                        ? src->linesize[0]
+                        : gray->linesize[0];
+                    std::ostringstream ss;
+                    ss << "sw_" << std::setw(6) << std::setfill('0') << hashes.size() << ".pgm";
+                    write_pgm(dumpDir / ss.str(), dumpPlane, src->width, src->height, dumpStride);
+                }
+
+                if (auto h = compute_phash_full(src->data[0], src->width, src->height)) {
+                    hashes.push_back(*h);
+                    if (max_frames > 0) {
+                        int pct_now = int(hashes.size() * 100 / max_frames);
+                        if (pct_now != last_progress && pct_now <= 100) {
+                            last_progress = pct_now;
+                            report_progress(on_progress, pct_now);
+                        }
+                    }
+                }
+
+                av_frame_unref(frm.get());
+
+                if (max_frames > 0 && int(hashes.size()) >= max_frames) {
+                    stopped = true;
+                    break;
+                }
             }
-            if (auto h = compute_phash_full(frame_to_hash->data[0], frame_to_hash->width, frame_to_hash->height)) {
-                hashes.push_back(*h);
-                spdlog::debug("[sw] Stored hash {:016x} from flushed frame pts {} (Total hashes: {})", *h, frm->pts, hashes.size());
-                // Optionally update progress during flush too
-            }
-            av_frame_unref(frm.get());
-            if (max_frames > 0 && static_cast<int>(hashes.size()) >= max_frames) {
-                spdlog::info("[sw] Reached max_frames limit ({}) during flush.", max_frames);
-                break; // Stop flushing if limit reached
-            }
+            if (sret != AVERROR(EAGAIN))
+                break; // packet fully sent or fatal — move to next packet
         }
-        spdlog::info("[sw] SW decoder flushed.");
     }
 
-    spdlog::info("[sw] SW decode/hash finished. {} frames seen, {} hashes extracted.", frames_seen, hashes.size());
+decode_done:
+    /* ───────────────────────── flush remaining ───────────────────────── */
+    if (!fatal_error && !stopped) {
+        avcodec_send_packet(codec_ctx.get(), nullptr);
+        while (true) {
+            int rret = avcodec_receive_frame(codec_ctx.get(), frm.get());
+            if (rret == AVERROR_EOF || rret == AVERROR(EAGAIN))
+                break;
+            if (rret < 0) {
+                spdlog::warn("[ffmpeg-sw] flush receive_frame: {}", ff_err2str(rret));
+                break;
+            }
+            ++frames_seen;
+            AVFrame* src = frm.get();
+            if (swsCtx)
+                sws_scale(swsCtx.get(), frm->data, frm->linesize, 0, frm->height, gray->data, gray->linesize), src = gray.get();
+            if (auto h = compute_phash_full(src->data[0], src->width, src->height))
+                hashes.push_back(*h);
+            av_frame_unref(frm.get());
+            if (max_frames > 0 && int(hashes.size()) >= max_frames)
+                break;
+        }
+    }
+
+    spdlog::info("[sw] finished: {} frames seen, {} hashes", frames_seen, hashes.size());
     return hashes;
 }
 

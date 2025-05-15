@@ -59,7 +59,7 @@ MainWindow::MainWindow(QWidget* parent)
 {
     ui->setupUi(this);
 
-    // ---------- Videos tab (duplicate detector) -----------------------------
+    // Videos tab
     auto* view = ui->tableView;
     view->setModel(m_model.get());
     view->setItemDelegate(new GroupRowDelegate(this));
@@ -73,7 +73,7 @@ MainWindow::MainWindow(QWidget* parent)
     view->setIconSize(QSize(128, 128));
     view->setFocusPolicy(Qt::StrongFocus);
 
-    // ---------- Hardware‑Accel tab ---------------------------------------------
+    // Hardware‑Accel tab
     m_hwFilterModel = new HardwareFilterModel(this);
     ui->hardwareFilterView->setModel(m_hwFilterModel);
     ui->hardwareFilterView->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
@@ -82,21 +82,17 @@ MainWindow::MainWindow(QWidget* parent)
     ui->customTestsView->setModel(m_customModel);
     ui->customTestsView->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
 
-    // Pre‑populate Custom‑Tests with built‑in samples -------------------------
+    // Pre‑populate Custom‑Tests with all files in the test_videos directory
     QString const base = QDir::homePath() + "/Documents/NDVDetector/test_videos/";
-    QStringList const builtin = {
-        "libx264_yuv420p10le.mp4", "libx265_yuv420p10le.mp4", "mpeg2video_yuv420p.mpg",
-        "vp9_yuv420p.webm", "libx264_yuv420p.mp4", "libx265_yuv420p.mp4",
-        "vc-1_wmv3_yuv420p.wmv", "libx264_yuv444p.mp4", "libx265_yuv444p10le.mp4",
-        "vp9_yuv420p10le.webm"
-    };
-    for (QString const& f : builtin) {
-        QFileInfo fi(base + f);
+    QDir dir(base);
+    QStringList const files = dir.entryList(QDir::Files | QDir::NoDotAndDotDot);
+    for (QString const& file : files) {
+        QFileInfo fi(dir.absoluteFilePath(file));
         if (fi.exists())
             m_customModel->append(probeFile(fi.absoluteFilePath()));
     }
 
-    // ---------- Worker thread ----------------------------------------------
+    // Worker thread
     m_codecWorker = new CodecTestWorker;
     m_codecWorker->moveToThread(&m_codecThread);
     connect(&m_codecThread, &QThread::finished, m_codecWorker, &QObject::deleteLater);

@@ -5,6 +5,7 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QGuiApplication>
 #include <QMessageBox>
 #include <QtGui/QOffscreenSurface>
 #include <QtGui/QOpenGLContext>
@@ -23,7 +24,6 @@ int main(int argc, char* argv[])
     // which crashes inside gdk-pixbuf when QFileDialog is used
     qputenv("QT_QPA_PLATFORMTHEME", QByteArray("none"));
     QGuiApplication::setDesktopSettingsAware(false);
-    QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
 
     QApplication app(argc, argv);
 
@@ -134,5 +134,3 @@ int main(int argc, char* argv[])
     w.show();
     return app.exec();
 }
-#include <QCoreApplication>
-#include <QGuiApplication> // for setDesktopSettingsAware()

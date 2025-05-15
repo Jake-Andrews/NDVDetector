@@ -66,7 +66,7 @@ void SearchWorker::process()
         // ── 4. Duplicate detection & persistence ──────────────
         auto all = m_db.getAllVideos();
         auto hashes = m_db.getAllHashGroups();
-        auto groups = findDuplicates(std::move(all), hashes, 4, 10);
+        auto groups = findDuplicates(std::move(all), hashes, 4, 3);
         m_db.storeDuplicateGroups(groups);
 
         emit finished(std::move(groups));
@@ -141,17 +141,14 @@ void SearchWorker::doExtractionAndDetection(std::vector<VideoInfo>& videos)
                     Qt::QueuedConnection);
             };
 
-            // Extract perceptual hashes with our improved function
             auto phashes = extract_phashes_from_video(
                 v.path,
-                kSkipPercent,    // skip first 15%
-                v.duration,      // let EGL/GL pick stream time-base
-                kMaxFrames,      // hash at most 400 frames
-                allowHW,         // use HW if available
-                progressCallback // thread-safe progress reporting
-            );
+                kSkipPercent,
+                v.duration,
+                kMaxFrames,
+                allowHW,
+                progressCallback);
 
-            // Handle the results
             if (phashes.empty()) {
                 spdlog::warn("[hash] No hashes generated for '{}'", v.path);
             } else if (!m_db.insertAllHashes(v.id, phashes)) {
