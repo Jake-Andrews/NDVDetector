@@ -1,11 +1,10 @@
-//  MainWindow.cpp
+// MainWindow.cpp
 #include "MainWindow.h"
 
 #include "FFProbeExtractor.h"
 #include "GPUVendor.h"
 #include "GroupRowDelegate.h"
 #include "RegexTesterDialog.h"
-#include "SearchSettings.h"
 #include "VideoModel.h"
 #include "ui_MainWindow.h"
 
@@ -14,21 +13,12 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QHeaderView>
-#include <QKeyEvent>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPlainTextEdit>
-#include <QProcess>
 #include <QProgressBar>
-#include <QPushButton>
-#include <QRegularExpression>
-#include <QTableView>
-#include <QThread>
 #include <QToolButton>
-#include <QTreeWidgetItem>
-#include <QUrl>
-
 #include <numeric>
 #include <spdlog/spdlog.h>
 
@@ -45,12 +35,11 @@ MainWindow::MainWindow(QWidget* parent)
 {
     ui->setupUi(this);
 
-    // Videos tab
+    // -- video list view setup --
     auto* view = ui->tableView;
     view->setModel(m_model.get());
     view->setItemDelegate(new GroupRowDelegate(this));
     view->viewport()->installEventFilter(this);
-
     view->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     view->verticalHeader()->setDefaultSectionSize(120);
     view->setShowGrid(false);
@@ -59,54 +48,50 @@ MainWindow::MainWindow(QWidget* parent)
     view->setIconSize(QSize(128, 128));
     view->setFocusPolicy(Qt::StrongFocus);
 
-    // Hardware‑Accel tab
-    m_hwFilterModel = new HardwareFilterModel(this);
-    ui->hardwareFilterView->setModel(m_hwFilterModel);
-    ui->hardwareFilterView->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    // -- hardware-accel test view setup --
+    m_testModel = std::make_unique<CustomTestModel>(this);
 
-    m_customModel = new CustomTestModel(this);
-    ui->customTestsView->setModel(m_customModel);
-    ui->customTestsView->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    auto* testView = ui->customTestsView;  //
+    testView->setModel(m_testModel.get()); // default delegate is OK
+    testView->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    testView->verticalHeader()->setDefaultSectionSize(24);
+    testView->setShowGrid(false);
+    testView->setSelectionBehavior(QAbstractItemView::SelectRows);
+    testView->setSelectionMode(QAbstractItemView::SingleSelection);
+    testView->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
 
-    // Pre‑populate Custom‑Tests with all files in the test_videos directory
-    QString const base = QDir::homePath() + "/Documents/NDVDetector/test_videos/";
-    QDir dir(base);
-    QStringList const files = dir.entryList(QDir::Files | QDir::NoDotAndDotDot);
-    for (QString const& file : files) {
-        QFileInfo fi(dir.absoluteFilePath(file));
-        if (!fi.exists())
-            continue;
-
-        QString filePath = fi.absoluteFilePath();
-        auto info = probe_video_codec_info(filePath);
-        if (!info)
-            continue;
-
-        auto [codec, pixFmt, profile, level] = *info;
-        TestItem item;
-        item.path = filePath;
-        item.codec = codec;
-        item.pixFmt = pixFmt;
-        item.profile = profile;
-        item.level = QString::number(level);
-        m_customModel->append(std::move(item));
-    }
-
-    // Worker thread
     m_codecWorker = new CodecTestWorker;
     m_codecWorker->moveToThread(&m_codecThread);
-    connect(&m_codecThread, &QThread::finished, m_codecWorker, &QObject::deleteLater);
 
-    connect(m_codecWorker, &CodecTestWorker::progress, this, [this](int d, int t) {
-        ui->progressBar->setValue(t ? 100 * d / t : 0);
-    });
-    connect(m_codecWorker, &CodecTestWorker::result, this, [this](TestItem const& it, bool hw, bool sw) {
-        m_customModel->updateResult(it.path, hw, sw);
-    });
-    connect(m_codecWorker, &CodecTestWorker::finished, this, [this] {
-        ui->statusLabel->setText(tr("Finished"));
-        ui->runButton->setEnabled(true);
-    });
+    connect(&m_codecThread, &QThread::finished,
+        m_codecWorker, &QObject::deleteLater);
+
+    connect(m_codecWorker, &CodecTestWorker::progress,
+        this, [this](int d, int t) {
+            ui->progressBar->setValue(t ? 100 * d / t : 0);
+        });
+
+    connect(m_codecWorker, &CodecTestWorker::result, this,
+        [this](TestItem const& it, bool hw, bool sw) {
+            m_testModel->updateResult(it.path, hw, sw);
+            ui->statusLabel->setText(
+                QFileInfo(it.path).fileName() + " —  HW " + (hw ? "✅" : "❌") + "  SW " + (sw ? "✅" : "❌"));
+        });
+
+    connect(m_codecWorker, &CodecTestWorker::finished,
+        this, [this] {
+            ui->statusLabel->setText(tr("Finished"));
+            ui->runButton->setEnabled(true);
+        });
+
+    connect(m_codecWorker, &CodecTestWorker::finished,
+        &m_codecThread, &QThread::quit);
+
+    // -- buttons --
+    connect(ui->addVideoButton, &QPushButton::clicked,
+        this, &MainWindow::onAddVideoClicked);
+    connect(ui->runButton, &QPushButton::clicked,
+        this, &MainWindow::onRunTestsClicked);
 
     // ---------- Button hooks ------------------------------------------------
     connect(ui->addVideoButton, &QPushButton::clicked, this, &MainWindow::onAddVideoClicked);
@@ -188,9 +173,14 @@ void MainWindow::onSelectClicked()
     QMenu m(this);
     QAction* a1 = m.addAction(tr("Select All Except Largest"));
     QAction* a2 = m.addAction(tr("Select All Except Smallest"));
-    if (QAction* c = m.exec(QCursor::pos())) {
-        emit selectOptionChosen(c == a1 ? AllExceptLargest : AllExceptSmallest);
-    }
+    QAction* selected = m.exec(QCursor::pos());
+    if (!selected)
+        return;
+
+    if (selected == a1)
+        emit selectOptionChosen(AllExceptLargest);
+    else if (selected == a2)
+        emit selectOptionChosen(AllExceptSmallest);
 }
 
 void MainWindow::onSortClicked()
@@ -198,28 +188,49 @@ void MainWindow::onSortClicked()
     QMenu m(this);
     QAction* aSize = m.addAction(tr("Sort By Size"));
     QAction* aDate = m.addAction(tr("Sort By CreatedAt"));
-    if (QAction* c = m.exec(QCursor::pos()))
-        emit sortOptionChosen(c == aSize ? Size : CreatedAt);
+    QAction* selected = m.exec(QCursor::pos());
+    if (!selected)
+        return;
+
+    if (selected == aSize)
+        emit sortOptionChosen(Size);
+    else if (selected == aDate)
+        emit sortOptionChosen(CreatedAt);
 }
+
 void MainWindow::onSortGroupsClicked()
 {
     QMenu m(this);
     QAction* aSize = m.addAction(tr("Sort Groups By Size"));
     QAction* aDate = m.addAction(tr("Sort Groups By CreatedAt"));
-    if (QAction* c = m.exec(QCursor::pos()))
-        emit sortGroupsOptionChosen(c == aSize ? Size : CreatedAt);
+    QAction* selected = m.exec(QCursor::pos());
+    if (!selected)
+        return;
+
+    if (selected == aSize)
+        emit sortGroupsOptionChosen(Size);
+    else if (selected == aDate)
+        emit sortGroupsOptionChosen(CreatedAt);
 }
+
 void MainWindow::onDeleteClicked()
 {
     QMenu m(this);
     QAction* aList = m.addAction(tr("Delete From List"));
     QAction* aListDb = m.addAction(tr("Delete From List + DB"));
     QAction* aDisk = m.addAction(tr("Delete From Disk"));
-    if (QAction* c = m.exec(QCursor::pos())) {
-        emit deleteOptionChosen(c == aList ? List : c == aListDb ? ListDB
-                                                                 : Disk);
-    }
+    QAction* selected = m.exec(QCursor::pos());
+    if (!selected)
+        return;
+
+    if (selected == aList)
+        emit deleteOptionChosen(List);
+    else if (selected == aListDb)
+        emit deleteOptionChosen(ListDB);
+    else if (selected == aDisk)
+        emit deleteOptionChosen(Disk);
 }
+
 void MainWindow::onHardlinkClicked() { emit hardlinkTriggered(); }
 
 /*──────────────────────────────────────────────────────────────
@@ -323,65 +334,41 @@ void MainWindow::setCurrentDatabase(QString const& path) { ui->currentDbLineEdit
 void MainWindow::onAddVideoClicked()
 {
     QStringList files = QFileDialog::getOpenFileNames(
-        this, tr("Choose Video(s)"),
-        QString(), QString(),
-        nullptr, QFileDialog::DontUseNativeDialog);
-
-    for (QString const& filePath : files) {
-        if (filePath.isEmpty())
-            continue;
-
-        auto info = probe_video_codec_info(filePath);
-        if (!info)
-            continue;
-
-        auto [codec, pixFmt, profile, level] = *info;
-
-        TestItem item;
-        item.path = filePath;
-        item.codec = codec;
-        item.pixFmt = pixFmt;
-        item.profile = profile;
-        item.level = QString::number(level);
-
-        m_customModel->append(std::move(item));
-    }
+        this, tr("Choose Video(s)"), {}, {}, nullptr,
+        QFileDialog::DontUseNativeDialog);
+    for (QString const& f : files)
+        addTestFile(f);
 }
 
-void MainWindow::onCopyToFilterClicked()
-{
-    for (int r = 0; r < m_customModel->size(); ++r)
-        m_hwFilterModel->append(m_customModel->at(r));
-}
 void MainWindow::onRunTestsClicked()
 {
     ui->runButton->setEnabled(false);
     ui->statusLabel->setText(tr("Running…"));
     ui->progressBar->setValue(0);
 
-    m_hwFilterModel->resetResults();
-    m_codecWorker->setTests(buildTestList());
-
-    if (!m_codecThread.isRunning()) {
-        m_codecThread.start();
-        QMetaObject::invokeMethod(m_codecWorker, &CodecTestWorker::run, Qt::QueuedConnection);
-    }
+    startCodecWorker(buildTestList());
 }
 
-/*──────────────────────────────────────────────────────────────
- *  DIRECTORY helpers
- *──────────────────────────────────────────────────────────────*/
-/*──────────────────────────────────────────────────────────────
- *  Helpers – gather selected tests
- *──────────────────────────────────────────────────────────────*/
+void MainWindow::startCodecWorker(QVector<TestItem> const& tests)
+{
+    if (tests.isEmpty()) {
+        ui->statusLabel->setText(tr("Nothing to test"));
+        ui->runButton->setEnabled(true);
+        return;
+    }
+
+    m_codecWorker->setTests(tests);
+    if (!m_codecThread.isRunning())
+        m_codecThread.start();
+
+    QMetaObject::invokeMethod(m_codecWorker, "run", Qt::QueuedConnection);
+}
+
 QVector<TestItem> MainWindow::buildTestList() const
 {
-    return m_hwFilterModel->includedTests();
+    return m_testModel->items();
 }
 
-/*──────────────────────────────────────────────────────────────
- *  SEARCH SETTINGS helper (unchanged from your prior version)
- *──────────────────────────────────────────────────────────────*/
 SearchSettings MainWindow::collectSearchSettings() const
 {
     SearchSettings s;
@@ -506,36 +493,14 @@ void MainWindow::onValidatePatternsClicked()
     }
 }
 
-CodecTestWorker::CodecTestWorker(QObject* p)
-    : QObject(p)
+void MainWindow::addTestFile(QString const& path)
 {
-}
+    auto info = probe_video_codec_info(path);
+    if (!info)
+        return;
 
-bool CodecTestWorker::tryDecode(TestItem const& it, bool hw)
-{
-    QStringList args;
-    if (hw)
-        args << "-hwaccel" << "auto";
-
-    args << "-v" << "error"
-         << "-i" << it.path
-         << "-f" << "null"
-         << "-";
-
-    QProcess p;
-    p.start("ffmpeg", args);
-    p.waitForFinished(-1);
-    return p.exitStatus() == QProcess::NormalExit && p.exitCode() == 0;
-}
-
-void CodecTestWorker::run()
-{
-    int done = 0, total = m_tests.size();
-    for (TestItem const& t : m_tests) {
-        bool hwOk = tryDecode(t, true);
-        bool swOk = hwOk || tryDecode(t, false);
-        emit result(t, hwOk, swOk);
-        emit progress(++done, total);
-    }
-    emit finished();
+    auto [codec, pixFmt, profile, level] = *info;
+    TestItem item { path, codec, pixFmt, profile, QString::number(level) };
+    m_tests.push_back(item);              // keep the in‑memory list
+    m_testModel->append(std::move(item)); // paint a new row
 }

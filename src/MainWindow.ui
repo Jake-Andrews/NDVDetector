@@ -101,7 +101,7 @@
           <property name="title"><string>Search Filters</string></property>
           <layout class="QFormLayout" name="filtersLayout">
            <!-- regex help row -->
-           <item row="0" column="0" colspan="3">
+           <item row="0" column="1">
             <widget class="QToolButton" name="regexHelpButton">
              <property name="text"><string>Regex ?</string></property>
              <property name="toolTip"><string>
@@ -258,19 +258,6 @@
        <attribute name="title"><string>Hardware Accel</string></attribute>
        <layout class="QVBoxLayout" name="hardwareAccelLayout">
     
-        <!-- Hardware‑filter table -->
-        <item>
-          <widget class="QLabel" name="hardwareFilterLabel">
-            <property name="text">
-              <string>Hardware Acceleration Filter</string>
-            </property>
-            <property name="styleSheet">
-              <string>font-weight: bold; padding: 4px;</string>
-            </property>
-          </widget>
-        </item>
-        <item><widget class="QTableView" name="hardwareFilterView"><property name="sortingEnabled"><bool>true</bool></property></widget></item>
-    
         <!-- control buttons between the tables -->
         <item>
          <layout class="QHBoxLayout">
@@ -283,8 +270,21 @@
          </layout>
         </item>
 
+        <item>
+         <widget class="QLabel" name="hardwareFilterLabel">
+          <property name="text"><string>Hardware Acceleration Filter</string></property>
+          <property name="styleSheet"><string>font-weight: bold; padding: 4px;</string></property>
+         </widget>
+        </item>
+
         <!-- Custom‑tests (video list) table -->
-        <item><widget class="QTableView" name="customTestsView"><property name="sortingEnabled"><bool>true</bool></property></widget></item>
+        <item>
+            <widget class="QTableView" name="customTestsView">
+                <property name="sortingEnabled">
+                    <bool>true</bool>
+                </property>
+            </widget>
+        </item>
     
        </layout>
       </widget>

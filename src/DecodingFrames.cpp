@@ -190,7 +190,7 @@ private:
 } // namespace gl
 
 // VA‑API  →  dma‑buf (luma)  →  EGLImage  →  GL compute shader
-static std::vector<uint64_t> decode_and_hash_hw_gl(std::string const& file,
+std::vector<uint64_t> decode_and_hash_hw_gl(std::string const& file,
     double skip_pct,
     int duration_s,
     int max_frames,
@@ -328,7 +328,7 @@ static std::vector<uint64_t> decode_and_hash_hw_gl(std::string const& file,
 }
 
 // CPU/Software decoding path
-static std::vector<uint64_t> decode_and_hash_sw(
+std::vector<uint64_t> decode_and_hash_sw(
     std::string const& file,
     double skip_pct,
     int duration_s,
