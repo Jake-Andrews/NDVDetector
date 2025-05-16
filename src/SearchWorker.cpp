@@ -121,6 +121,12 @@ void SearchWorker::doExtractionAndDetection(std::vector<VideoInfo>& videos)
     spdlog::info("Thumbnail/FFprobe finished");
     spdlog::info("Hashing started");
 
+    // Check the m_cfg.hwBackend, if AV_HWDEVICE_TYPE_NONE then no hardware
+    // accel
+    // If a hwBackend was chosen compare the video's codec, profile, and level
+    // to the hardware filters that the user created. If no filters were setup,
+    // then use the default filter for the chosen backend.
+
     // Step B – pHash extraction & DB insertion
     for (auto const& v : videos) {
         try {

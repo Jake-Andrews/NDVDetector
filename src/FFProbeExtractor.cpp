@@ -1,5 +1,6 @@
 #include "FFProbeExtractor.h"
 
+#include <QString>
 #include <filesystem>
 #include <iostream>
 #include <libavcodec/defs.h>
@@ -118,4 +119,62 @@ bool extract_info(VideoInfo& out)
     }
 
     return true;
+}
+
+std::optional<std::tuple<QString, QString, QString, int>>
+probe_video_codec_info(QString const& qpath)
+{
+    std::string path = qpath.toStdString();
+
+    if (!std::filesystem::exists(path)) {
+        spdlog::error("[FFmpeg] File does not exist: {}", path);
+        return std::nullopt;
+    }
+
+    auto formatCtxOpt = open_format_context(path);
+    if (!formatCtxOpt) {
+        spdlog::error("[FFmpeg] Failed to open format context for: {}", path);
+        return std::nullopt;
+    }
+
+    if (avformat_find_stream_info(formatCtxOpt->get(), nullptr) < 0) {
+        spdlog::error("[FFmpeg] Failed to find stream info for: {}", path);
+        return std::nullopt;
+    }
+
+    for (unsigned i = 0; i < formatCtxOpt->get()->nb_streams; ++i) {
+        AVStream* stream = formatCtxOpt->get()->streams[i];
+        if (!stream || !stream->codecpar)
+            continue;
+
+        AVCodecParameters* params = stream->codecpar;
+        if (params->codec_type != AVMEDIA_TYPE_VIDEO)
+            continue;
+
+        AVCodec const* codec = avcodec_find_decoder(params->codec_id);
+        QString codecName = codec ? codec->name : "unknown";
+
+        QString pixFmt = "unknown";
+        if (params->format != AV_PIX_FMT_NONE) {
+            char const* name = av_get_pix_fmt_name(static_cast<AVPixelFormat>(params->format));
+            if (name)
+                pixFmt = name;
+        }
+
+        QString profile = "unknown";
+        if (params->profile != AV_PROFILE_UNKNOWN && codec) {
+            char const* pname = avcodec_profile_name(codec->id, params->profile);
+            if (pname)
+                profile = pname;
+            else
+                profile = QString::number(params->profile);
+        }
+
+        int level = params->level;
+
+        return std::make_tuple(codecName, pixFmt, profile, level);
+    }
+
+    spdlog::error("[FFmpeg] No video stream found in file: {}", path);
+    return std::nullopt;
 }

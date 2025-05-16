@@ -1,6 +1,7 @@
 //  MainWindow.cpp
 #include "MainWindow.h"
 
+#include "FFProbeExtractor.h"
 #include "GPUVendor.h"
 #include "GroupRowDelegate.h"
 #include "RegexTesterDialog.h"
@@ -36,21 +37,6 @@ extern "C" {
 }
 
 using namespace std::string_literals;
-
-namespace {
-// Probe a video file with ffprobe and return a TestItem
-TestItem probeFile(QString const& file)
-{
-    QStringList args { "-v", "error", "-select_streams", "v:0",
-        "-show_entries", "stream=codec_name,pix_fmt,profile,level",
-        "-of", "csv=p=0", file };
-    QProcess p;
-    p.start("ffprobe", args);
-    p.waitForFinished(-1);
-    QStringList parts = QString(p.readAllStandardOutput()).trimmed().split(',');
-    return { file, parts.value(0), parts.value(1), parts.value(2), parts.value(3) };
-}
-} // namespace
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -88,8 +74,22 @@ MainWindow::MainWindow(QWidget* parent)
     QStringList const files = dir.entryList(QDir::Files | QDir::NoDotAndDotDot);
     for (QString const& file : files) {
         QFileInfo fi(dir.absoluteFilePath(file));
-        if (fi.exists())
-            m_customModel->append(probeFile(fi.absoluteFilePath()));
+        if (!fi.exists())
+            continue;
+
+        QString filePath = fi.absoluteFilePath();
+        auto info = probe_video_codec_info(filePath);
+        if (!info)
+            continue;
+
+        auto [codec, pixFmt, profile, level] = *info;
+        TestItem item;
+        item.path = filePath;
+        item.codec = codec;
+        item.pixFmt = pixFmt;
+        item.profile = profile;
+        item.level = QString::number(level);
+        m_customModel->append(std::move(item));
     }
 
     // Worker thread
@@ -322,11 +322,32 @@ void MainWindow::setCurrentDatabase(QString const& path) { ui->currentDbLineEdit
 // ─────────────────────────────────────────────────────────────────────────────
 void MainWindow::onAddVideoClicked()
 {
-    QStringList files = QFileDialog::getOpenFileNames(this, tr("Choose Video(s)"), QString(), QString(), nullptr, QFileDialog::DontUseNativeDialog);
-    for (QString const& f : files)
-        if (!f.isEmpty())
-            m_customModel->append(probeFile(f));
+    QStringList files = QFileDialog::getOpenFileNames(
+        this, tr("Choose Video(s)"),
+        QString(), QString(),
+        nullptr, QFileDialog::DontUseNativeDialog);
+
+    for (QString const& filePath : files) {
+        if (filePath.isEmpty())
+            continue;
+
+        auto info = probe_video_codec_info(filePath);
+        if (!info)
+            continue;
+
+        auto [codec, pixFmt, profile, level] = *info;
+
+        TestItem item;
+        item.path = filePath;
+        item.codec = codec;
+        item.pixFmt = pixFmt;
+        item.profile = profile;
+        item.level = QString::number(level);
+
+        m_customModel->append(std::move(item));
+    }
 }
+
 void MainWindow::onCopyToFilterClicked()
 {
     for (int r = 0; r < m_customModel->size(); ++r)
