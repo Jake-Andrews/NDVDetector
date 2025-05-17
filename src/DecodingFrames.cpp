@@ -416,7 +416,7 @@ std::vector<uint64_t> decode_and_hash_hw_gl(
 
                 if (keep) {
                     if (!lumaext::extract_luma_32x32(tl.api(), va_dpy, frm.get(), gray.data())) {
-                        spdlog::warn("[hw] extract_luma_32x32 failed");
+                        spdlog::warn("[hw] extract_luma_32x32 failed ({})", lumaext::to_string(lumaext::last_error()));
                         bumpError();
                     } else {
                         if constexpr (kDumpFrames) {
@@ -780,8 +780,6 @@ std::vector<uint64_t> extract_phashes_from_video(
 
     std::vector<uint64_t> hashes_result;
     bool hw_attempted = false;
-
-    allow_hw = true; // **fix, caller should set this**
 
     if (allow_hw) {
         spdlog::info("Hardware acceleration allowed, attempting HW path...");

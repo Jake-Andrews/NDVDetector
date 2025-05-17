@@ -5,7 +5,9 @@
 #include "FileSystemSearch.h"
 #include "Thumbnail.h"
 
+#include "CodecTestWorker.h"
 #include <QDebug>
+#include <QRegularExpression>
 #include <filesystem>
 #include <functional>
 #include <spdlog/spdlog.h>
@@ -13,6 +15,73 @@
 
 static constexpr double kSkipPercent = 0.15;
 static constexpr int kMaxFrames = 50;
+
+namespace {
+
+// convert a glob pattern (* ?) to a full ECMAScript regexp, ^…$
+QString globToRegex(QString const& glob)
+{
+    QString rx;
+    rx.reserve(glob.size() * 2);
+    rx += '^';
+    for (QChar c : glob) {
+        switch (c.unicode()) {
+        case '*':
+            rx += ".*";
+            break;
+        case '?':
+            rx += '.';
+            break;
+        case '.':
+            rx += "\\.";
+            break;
+        case '\\':
+            rx += "\\\\";
+            break;
+        case '+':
+        case '(':
+        case ')':
+        case '{':
+        case '}':
+        case '^':
+        case '$':
+        case '|':
+        case '[':
+        case ']':
+            rx += '\\';
+            rx += c;
+            break;
+        default:
+            rx += c;
+        }
+    }
+    rx += '$';
+    return rx;
+}
+
+// build a case-insensitive QRegularExpression; if pattern contains * / ?
+// treat it as glob, otherwise treat it as raw regexp.  Empty ⇒ wildcard.
+QRegularExpression makeRegex(QString const& pat)
+{
+    if (pat.isEmpty())
+        return {}; // invalid → always matches
+    bool const hasGlob = pat.contains('*') || pat.contains('?');
+    QString rx = hasGlob ? globToRegex(pat) : QRegularExpression::escape(pat);
+    if (!hasGlob) {
+        // Anchor raw regex: match whole string exactly
+        // libx264 & yuv420p shouldn't match libx264 & yuv420p10le
+        rx = "^" + rx + "$";
+    }
+    return QRegularExpression(rx, QRegularExpression::CaseInsensitiveOption);
+}
+
+// returns true when `re` is empty / invalid (wildcard) or matches `val`
+inline bool reMatch(QRegularExpression const& re, QString const& val)
+{
+    return !re.isValid() || re.pattern().isEmpty() || re.match(val).hasMatch();
+}
+
+} // namespace
 
 SearchWorker::SearchWorker(DatabaseManager& db,
     SearchSettings cfg,
@@ -84,7 +153,41 @@ void SearchWorker::process()
 // ─────────────────────────────────────────────────────────────
 void SearchWorker::doExtractionAndDetection(std::vector<VideoInfo>& videos)
 {
-    // Initialize counters and flags
+    // ── Hardware-filter preparation ──
+    std::vector<TestItem> const rawFilters = m_db.loadHardwareFilters();
+
+    struct CompiledFilter {
+        QRegularExpression codec, pixFmt, profile, level;
+    };
+    std::vector<CompiledFilter> filters;
+    filters.reserve(rawFilters.size());
+    for (auto const& f : rawFilters) {
+        if (!f.hwOk)
+            continue;
+        filters.push_back({ makeRegex(f.codec),
+            makeRegex(f.pixFmt),
+            makeRegex(f.profile),
+            makeRegex(f.level) });
+    }
+
+    // Lambda that checks whether a VideoInfo matches at least one filter row
+    auto matchesAnyFilter = [&filters](VideoInfo const& v) -> bool {
+        QString const codec = QString::fromStdString(v.video_codec);
+        QString const pixFmt = QString::fromStdString(v.pix_fmt);
+        QString const profile = QString::fromStdString(v.profile);
+        QString const level = QString::number(v.level);
+
+        for (auto const& f : filters) {
+            if (reMatch(f.codec, codec)
+                && reMatch(f.pixFmt, pixFmt)
+                && reMatch(f.profile, profile)
+                && reMatch(f.level, level))
+                return true;
+        }
+        return false;
+    };
+    // ───────────────────────────────────────────────────────────────────────
+
     int hashedCount = 0;
     int totalToHash = static_cast<int>(videos.size());
 
@@ -132,8 +235,8 @@ void SearchWorker::doExtractionAndDetection(std::vector<VideoInfo>& videos)
         try {
             spdlog::info("[hash] Processing '{}'", v.path);
 
-            // HW decoding is enabled unless the UI forced "CPU-only"
-            bool allowHW = (m_cfg.hwBackend != AV_HWDEVICE_TYPE_NONE);
+            // HW decoding is enabled only if backend is not CPU-only and video matches a filter
+            bool allowHW = (m_cfg.hwBackend != AV_HWDEVICE_TYPE_NONE) && matchesAnyFilter(v);
 
             // Create a capture for the progress callback to avoid capturing 'this' by reference
             auto progressCallback = [worker = this, currentHashedCount = hashedCount,

@@ -39,7 +39,7 @@ extern "C" {
 
 namespace lumaext {
 
-inline char const* to_string(Err e) noexcept
+char const* to_string(Err e) noexcept
 {
     switch (e) {
     case Err::Ok:
@@ -64,7 +64,7 @@ thread_local Err g_last_err = Err::Ok;
 }
 
 inline void _set_err(Err e) noexcept { g_last_err = e; }
-inline Err last_error() noexcept { return g_last_err; }
+Err last_error() noexcept { return g_last_err; }
 
 namespace _detail {
 
@@ -252,18 +252,23 @@ public:
             glDeleteVertexArrays(1, &vao);
         if (prog)
             glDeleteProgram(prog);
+
+        if (rTex_id)
+            rTex_id.reset();
+        if (fbo_id)
+            fbo_id.reset();
     }
 
     static GLModule& instance()
     {
-        static GLModule m;
-        return m;
+        static thread_local GLModule tl;
+        return tl;
     }
 
     bool ensureInitialized();
     bool bindAndSetup(bool rgbLike, int sourceWidth, int sourceHeight);
-    GLuint getOutputTexture() const { return *rTex_id; }
-    GLuint getFramebuffer() const { return *fbo_id; }
+    GLuint getOutputTexture() const { return rTex_id ? *rTex_id : 0; }
+    GLuint getFramebuffer() const { return fbo_id ? *fbo_id : 0; }
 };
 
 bool GLModule::ensureInitialized()
