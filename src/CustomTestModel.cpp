@@ -7,8 +7,6 @@
 
 using namespace Qt::StringLiterals;
 
-static QString yesNo(bool ok) { return ok ? u"✅"_s : u"❌"_s; }
-
 QVariant CustomTestModel::data(QModelIndex const& ix, int role) const
 {
     if (!ix.isValid())
@@ -28,11 +26,14 @@ QVariant CustomTestModel::data(QModelIndex const& ix, int role) const
             return r.profile;
         case Level:
             return r.level;
-        case HW:
-            return yesNo(r.hwOk);
-        case SW:
-            return yesNo(r.swOk);
         }
+    }
+
+    if (role == Qt::CheckStateRole) {
+        if (ix.column() == HW)
+            return r.hwOk ? Qt::Checked : Qt::Unchecked;
+        if (ix.column() == SW)
+            return r.swOk ? Qt::Checked : Qt::Unchecked;
     }
 
     return {};
@@ -63,16 +64,14 @@ void CustomTestModel::append(TestItem&& t)
         m_db->upsertHardwareFilter(m_rows.back());
 }
 
-// ──────────────────────────────────────────────────────────────────────
 //  Scan ~/Documents/NDVDetector/test_videos/ and append one TestItem per file
-// ──────────────────────────────────────────────────────────────────────
 void CustomTestModel::loadInitial()
 {
     if (!m_db)
         return;
     auto vec = m_db->loadHardwareFilters();
     beginResetModel();
-    m_rows = QVector<TestItem>(vec.begin(), vec.end()); // Safe conversion
+    m_rows = QVector<TestItem>(vec.begin(), vec.end());
     endResetModel();
 }
 
@@ -107,9 +106,13 @@ Qt::ItemFlags CustomTestModel::flags(QModelIndex const& index) const
     case Level:
         return Qt::ItemIsSelectable | Qt::ItemIsEnabled | Qt::ItemIsEditable;
 
-    case File:
     case HW:
+        return Qt::ItemIsSelectable | Qt::ItemIsEnabled | Qt::ItemIsUserCheckable;
+
     case SW:
+        return Qt::ItemIsSelectable | Qt::ItemIsEnabled;
+
+    case File:
     default:
         return Qt::ItemIsSelectable | Qt::ItemIsEnabled;
     }
@@ -117,7 +120,7 @@ Qt::ItemFlags CustomTestModel::flags(QModelIndex const& index) const
 
 bool CustomTestModel::setData(QModelIndex const& index, QVariant const& value, int role)
 {
-    if (!index.isValid() || role != Qt::EditRole)
+    if (!index.isValid())
         return false;
 
     auto& item = m_rows[index.row()];
@@ -135,9 +138,16 @@ bool CustomTestModel::setData(QModelIndex const& index, QVariant const& value, i
     case Level:
         item.level = value.toString();
         break;
-    case File:
     case HW:
+        if (role == Qt::CheckStateRole) {
+            item.hwOk = (value.toInt() == Qt::Checked);
+        } else {
+            return false;
+        }
+        break;
     case SW:
+        return false; // Read-only
+    case File:
     default:
         return false;
     }
