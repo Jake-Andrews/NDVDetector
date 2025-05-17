@@ -67,7 +67,7 @@ int main(int argc, char* argv[])
     // -- App setup --
     DatabaseManager db("videos.db");
     VideoController controller(db);
-    MainWindow w;
+    MainWindow w(&db);
     controller.setModel(w.model());
 
     bool ascendingSort = true;

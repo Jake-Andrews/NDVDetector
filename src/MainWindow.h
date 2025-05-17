@@ -21,7 +21,7 @@ class MainWindow : public QMainWindow
 {
     Q_OBJECT
 public:
-    explicit MainWindow(QWidget* parent = nullptr);
+    explicit MainWindow(DatabaseManager* db, QWidget* parent = nullptr);
     ~MainWindow() override;
 
     void setDuplicateVideoGroups(const std::vector<std::vector<VideoInfo>>& groups);
@@ -84,6 +84,7 @@ private:
     Ui::MainWindow*             ui   = nullptr;
     std::unique_ptr<VideoModel> m_model;
 
+    DatabaseManager*            m_db = nullptr;          // already existing elsewhere in app
 
     CodecTestWorker*            m_codecWorker   = nullptr;
     QThread                     m_codecThread;

@@ -28,10 +28,11 @@ extern "C" {
 
 using namespace std::string_literals;
 
-MainWindow::MainWindow(QWidget* parent)
+MainWindow::MainWindow(DatabaseManager* db, QWidget* parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow)
     , m_model(std::make_unique<VideoModel>(this))
+    , m_db(db)
 {
     ui->setupUi(this);
 
@@ -49,7 +50,7 @@ MainWindow::MainWindow(QWidget* parent)
     view->setFocusPolicy(Qt::StrongFocus);
 
     // -- hardware-accel test view setup --
-    m_testModel = std::make_unique<CustomTestModel>(this);
+    m_testModel = std::make_unique<CustomTestModel>(m_db, this);
 
     auto* testView = ui->customTestsView;  //
     testView->setModel(m_testModel.get()); // default delegate is OK
@@ -86,12 +87,6 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(m_codecWorker, &CodecTestWorker::finished,
         &m_codecThread, &QThread::quit);
-
-    // -- buttons --
-    connect(ui->addVideoButton, &QPushButton::clicked,
-        this, &MainWindow::onAddVideoClicked);
-    connect(ui->runButton, &QPushButton::clicked,
-        this, &MainWindow::onRunTestsClicked);
 
     // ---------- Button hooks ------------------------------------------------
     connect(ui->addVideoButton, &QPushButton::clicked, this, &MainWindow::onAddVideoClicked);
@@ -458,9 +453,6 @@ SearchSettings MainWindow::collectSearchSettings() const
     return s;
 }
 
-/*──────────────────────────────────────────────────────────────
- *  PATTERN VALIDATION button
- *──────────────────────────────────────────────────────────────*/
 void MainWindow::onValidatePatternsClicked()
 {
     SearchSettings tmp;

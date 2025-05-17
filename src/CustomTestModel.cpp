@@ -1,9 +1,9 @@
 // CustomTestModel.cpp
 #include "CustomTestModel.h"
-#include "FFProbeExtractor.h" // probe_video_codec_info
+#include "DatabaseManager.h"
 #include <QDir>
+#include <QVector>
 #include <qfileinfo.h>
-#include <tuple>
 
 using namespace Qt::StringLiterals;
 
@@ -47,11 +47,20 @@ QVariant CustomTestModel::headerData(int s, Qt::Orientation o, int role) const
     return names.value(s);
 }
 
+CustomTestModel::CustomTestModel(DatabaseManager* db, QObject* parent)
+    : QAbstractTableModel(parent)
+    , m_db(db)
+{
+    loadInitial();
+}
+
 void CustomTestModel::append(TestItem&& t)
 {
     beginInsertRows({}, m_rows.size(), m_rows.size());
     m_rows.push_back(std::move(t));
     endInsertRows();
+    if (m_db)
+        m_db->upsertHardwareFilter(m_rows.back());
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -59,29 +68,14 @@ void CustomTestModel::append(TestItem&& t)
 // ──────────────────────────────────────────────────────────────────────
 void CustomTestModel::loadInitial()
 {
-    QString dirPath = QDir::homePath() + "/Documents/NDVDetector/test_videos/";
-    QDir dir(dirPath);
-    QStringList files = dir.entryList(QDir::Files | QDir::NoDotAndDotDot);
-
-    for (QString const& f : files) {
-        QString full = dir.filePath(f);
-
-        // Default placeholders
-        QString codec = "?", pixFmt = "?", profile = "?", level = "?";
-
-        if (auto info = probe_video_codec_info(full); info) {
-            QString c, pf, pr;
-            int lvl;
-            std::tie(c, pf, pr, lvl) = *info;
-            codec = c;
-            pixFmt = pf;
-            profile = pr;
-            level = QString::number(lvl);
-        }
-
-        append(TestItem { full, codec, pixFmt, profile, level });
-    }
+    if (!m_db)
+        return;
+    auto vec = m_db->loadHardwareFilters();
+    beginResetModel();
+    m_rows = QVector<TestItem>(vec.begin(), vec.end()); // Safe conversion
+    endResetModel();
 }
+
 int CustomTestModel::rowForPath(QString const& p) const
 {
     for (int i = 0; i < m_rows.size(); ++i)
@@ -97,6 +91,8 @@ void CustomTestModel::updateResult(QString const& p, bool hw, bool sw)
     m_rows[row].hwOk = hw;
     m_rows[row].swOk = sw;
     emit dataChanged(index(row, HW), index(row, SW));
+    if (m_db)
+        m_db->updateHardwareFilterResult(p, hw, sw);
 }
 
 Qt::ItemFlags CustomTestModel::flags(QModelIndex const& index) const
@@ -145,6 +141,9 @@ bool CustomTestModel::setData(QModelIndex const& index, QVariant const& value, i
     default:
         return false;
     }
+
+    if (m_db)
+        m_db->upsertHardwareFilter(item);
 
     emit dataChanged(index, index);
     return true;

@@ -8,6 +8,7 @@
 #include "SearchSettings.h"
 #include "Hash.h"
 #include "VideoInfo.h"
+#include "CodecTestWorker.h"      // for TestItem
 
  class DatabaseManager {
  public:
@@ -37,6 +38,11 @@
 
     SearchSettings loadSettings() const; 
     void saveSettings(SearchSettings const&);
+
+    std::vector<TestItem> loadHardwareFilters() const;
+    void                  upsertHardwareFilter(const TestItem& t);      // insert or update
+    void                  updateHardwareFilterResult(const QString& path,
+                                                     bool hwOk, bool swOk);
  
      bool open(QString const& file, bool createIfMissing);
  
@@ -45,5 +51,6 @@
  
      void initDatabase();
      void execStatement(std::string const& sql);
+     void populateHardwareFiltersIfEmpty();
  };
 
