@@ -23,6 +23,8 @@
 
 // saves frames to fs for debugging
 static constexpr bool kDumpFrames = true;
+static constexpr double kSamplePeriod = 1.0; // seconds → 1 FPS
+static constexpr int kMaxHwErrors = 30;      // non‑fatal errors before abandoning HW
 
 static void write_pgm(std::filesystem::path const& file,
     uint8_t const* data, int w, int h, int stride)
@@ -189,9 +191,23 @@ private:
 };
 } // namespace gl
 
+using util::sec_to_pts;
+
+static inline bool sample_hit(int64_t pts, int64_t& next_pts, int64_t step)
+{
+    if (pts == AV_NOPTS_VALUE)
+        return false;
+    if (pts >= next_pts) {
+        next_pts += step;
+        return true;
+    }
+    return false;
+}
+
 // VA‑API  →  dma‑buf (luma)  →  EGLImage  →  GL compute shader
-std::vector<uint64_t> decode_and_hash_hw_gl(std::string const& file,
-    double skip_pct,
+std::vector<uint64_t> decode_and_hash_hw_gl(
+    std::string const& file,
+    double skip_sec,
     int duration_s,
     int max_frames,
     std::function<void(int)> const& progress)
@@ -200,26 +216,32 @@ std::vector<uint64_t> decode_and_hash_hw_gl(std::string const& file,
     std::vector<uint64_t> hashes;
 
     auto& tl = gl::ThreadLocalContext::current();
-    if (!tl.ensure_current())
+    if (!tl.ensure_current()) {
+        spdlog::error("[hw] Failed to ensure GL context");
         return hashes;
+    }
 
-    // Open container
+    // ── open container ──
     FmtPtr fmt;
-    AVFormatContext* fmtPtr = nullptr;
-    if (avformat_open_input(&fmtPtr, file.c_str(), nullptr, nullptr) < 0 || avformat_find_stream_info(fmtPtr, nullptr) < 0)
+    AVFormatContext* raw = nullptr;
+    if (avformat_open_input(&raw, file.c_str(), nullptr, nullptr) < 0) {
+        spdlog::error("[hw] Failed to open input file: {}", file);
         return hashes;
-    fmt.reset(fmtPtr);
+    }
+    fmt.reset(raw);
+
+    if (avformat_find_stream_info(raw, nullptr) < 0) {
+        spdlog::error("[hw] Failed to find stream info");
+        return hashes;
+    }
 
     int vstream = av_find_best_stream(fmt.get(), AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-    if (vstream < 0)
+    if (vstream < 0) {
+        spdlog::error("[hw] No video stream found");
         return hashes;
+    }
     AVStream* st = fmt->streams[vstream];
-    AVCodec const* dec = avcodec_find_decoder(st->codecpar->codec_id);
-    if (!dec)
-        return hashes;
 
-    // **temporary**
-    // Caller should be setting the duration and filtering duration <= 0
     if (duration_s <= 0) {
         if (st->duration != AV_NOPTS_VALUE)
             duration_s = int(st->duration * av_q2d(st->time_base));
@@ -227,103 +249,241 @@ std::vector<uint64_t> decode_and_hash_hw_gl(std::string const& file,
             duration_s = int(fmt->duration / AV_TIME_BASE);
     }
 
-    // Allocate and configure AVCodecContext, used for decoding
-    // AVHWDeviceContext -> hw_AV_HWDEVICE_TYPE_VAAPI for hardware accelerated
-    // decoding
-    // AVPixelFormat -> AV_PIX_FMT_VAAPI for zero copy
-    AVBufferRef* hw_dev = nullptr;
-    if (av_hwdevice_ctx_create(&hw_dev, AV_HWDEVICE_TYPE_VAAPI, nullptr, nullptr, 0) < 0)
+    // Apply skip_sec by setting start time
+    if (skip_sec > 0) {
+        int64_t skip_pts = sec_to_pts(skip_sec, st->time_base);
+        if (skip_pts > 0) {
+            spdlog::info("[hw] Seeking to {} seconds", skip_sec);
+            if (av_seek_frame(fmt.get(), vstream, skip_pts, AVSEEK_FLAG_BACKWARD) < 0) {
+                spdlog::warn("[hw] Seek failed, starting from beginning");
+            }
+        }
+    }
+
+    AVCodec const* dec = avcodec_find_decoder(st->codecpar->codec_id);
+    if (!dec) {
+        spdlog::error("[hw] No decoder found for codec id: {}", static_cast<int>(st->codecpar->codec_id));
         return hashes;
+    }
+
+    // ── hw device ──
+    AVBufferRef* hw_dev = nullptr;
+    int hw_err = av_hwdevice_ctx_create(&hw_dev, AV_HWDEVICE_TYPE_VAAPI, nullptr, nullptr, 0);
+    if (hw_err < 0) {
+        spdlog::error("[hw] Failed to create hardware device context: {}", ff_err2str(hw_err));
+        return hashes;
+    }
     util::BufPtr hw_dev_ref(hw_dev);
 
     CtxPtr codec_ctx { avcodec_alloc_context3(dec) };
-    if (avcodec_parameters_to_context(codec_ctx.get(), st->codecpar) < 0)
-        return {};
+    if (!codec_ctx) {
+        spdlog::error("[hw] Failed to allocate codec context");
+        return hashes;
+    }
 
+    if (avcodec_parameters_to_context(codec_ctx.get(), st->codecpar) < 0) {
+        spdlog::error("[hw] Failed to copy codec parameters to context");
+        return hashes;
+    }
+
+    // Create a managed reference for hw_device_ctx
     codec_ctx->hw_device_ctx = av_buffer_ref(hw_dev);
-    codec_ctx->get_format = [](AVCodecContext*, AVPixelFormat const* l) -> AVPixelFormat {
-        while (*l != AV_PIX_FMT_NONE) {
-            if (*l == AV_PIX_FMT_VAAPI)
-                return AV_PIX_FMT_VAAPI;
-            ++l;
-        }
+    if (!codec_ctx->hw_device_ctx) {
+        spdlog::error("[hw] Failed to reference hardware device context");
+        return hashes;
+    }
+
+    codec_ctx->get_format = [](AVCodecContext*, AVPixelFormat const* p) {
+        for (; *p != AV_PIX_FMT_NONE; ++p)
+            if (*p == AV_PIX_FMT_VAAPI)
+                return *p;
         return AV_PIX_FMT_NONE;
     };
 
-    /* decode only key-frames */
-    codec_ctx->skip_frame = AVDISCARD_NONKEY; // discard every non-key frame
-
     if (avcodec_open2(codec_ctx.get(), dec, nullptr) < 0) {
-        spdlog::error("[ffmpeg-hw] failed to open HW decoder");
-        return hashes;
+        spdlog::warn("[hw] avcodec_open2 failed – abandoning HW path early");
+        return {}; // let SW take over immediately
     }
 
     auto* devctx = reinterpret_cast<AVHWDeviceContext*>(hw_dev->data);
     auto* vactx = reinterpret_cast<AVVAAPIDeviceContext*>(devctx->hwctx);
     VADisplay va_dpy = vactx->display;
 
-    // GL compute shader
+    // ── GL + dump dir ──
     glpipe::Mean32PipelineGL pipe(tl.api());
     std::array<uint8_t, constants::kOutW * constants::kOutH> gray;
-
     std::filesystem::path dumpDir;
     if constexpr (kDumpFrames) {
         dumpDir = std::filesystem::path("frames") / QFileInfo(QString::fromStdString(file)).completeBaseName().toStdString();
         std::filesystem::create_directories(dumpDir);
     }
 
-    // Seek
-    double pct = std::clamp(skip_pct, 0.0, 0.2);
-    int64_t seek_pts = AV_NOPTS_VALUE;
-    if (duration_s > 0 && pct > 0.0) {
-        seek_pts = sec_to_pts(pct * duration_s, st->time_base);
-        if (seek_pts > 0) {
-            av_seek_frame(fmt.get(), vstream, seek_pts, AVSEEK_FLAG_BACKWARD);
-            avcodec_flush_buffers(codec_ctx.get());
-        }
+    // ── sampling control ──
+    int64_t step_pts = sec_to_pts(kSamplePeriod, st->time_base);
+    if (step_pts <= 0) {
+        spdlog::warn("[hw] Invalid step_pts calculated, forcing to 1");
+        step_pts = 1;
+    }
+    int64_t next_pts = 0;
+
+    FrmPtr frm(av_frame_alloc());
+    if (!frm) {
+        spdlog::error("[hw] Failed to allocate frame");
+        return hashes;
     }
 
-    // Main decode loop
-    FrmPtr frm(av_frame_alloc());
     PktPtr pkt(av_packet_alloc());
-    int lastPct = -1;
+    if (!pkt) {
+        spdlog::error("[hw] Failed to allocate packet");
+        return hashes;
+    }
 
-    while ((max_frames <= 0 || (int)hashes.size() < max_frames) && av_read_frame(fmt.get(), pkt.get()) >= 0) {
-        if (pkt->stream_index != vstream || !(pkt->flags & AV_PKT_FLAG_KEY)) {
-            av_packet_unref(pkt.get()); // skip non-video or non-key packets
+    int lastPct = -1;
+    int errorBudget = 0;
+    int64_t total_frames = 0; // Track total frames processed for progress reporting
+
+    // Define error classification functions
+    auto tooManyErrors = [&]() { return errorBudget >= kMaxHwErrors; };
+    auto bumpError = [&]() {
+        if (++errorBudget == kMaxHwErrors)
+            spdlog::warn("[hw] error budget exhausted ({} errors) – falling back to SW", kMaxHwErrors);
+    };
+
+    // Define consistent error handlers
+    /*
+    auto handleFatalError = [&](int err, char const* context) {
+        spdlog::error("[hw] Fatal error in {}: {}", context, ff_err2str(err));
+        return true; // signal to exit
+    };
+    */
+
+    auto handleSoftError = [&](int err, char const* context) {
+        spdlog::warn("[hw] Recoverable error in {}: {}", context, ff_err2str(err));
+        bumpError();
+        return false; // signal to continue
+    };
+
+    // Main decoding loop
+    while (!tooManyErrors() && (max_frames <= 0 || static_cast<int>(hashes.size()) < max_frames)) {
+
+        int read_result = av_read_frame(fmt.get(), pkt.get());
+        if (read_result < 0) {
+            if (read_result == AVERROR_EOF) {
+                spdlog::info("[hw] End of file reached");
+                break; // Normal end of file
+            } else {
+                if (handleSoftError(read_result, "av_read_frame"))
+                    break;
+                continue;
+            }
+        }
+
+        // Skip non-video packets
+        if (pkt->stream_index != vstream) {
+            av_packet_unref(pkt.get());
             continue;
         }
-        avcodec_send_packet(codec_ctx.get(), pkt.get());
+
+        int sret = avcodec_send_packet(codec_ctx.get(), pkt.get());
         av_packet_unref(pkt.get());
-        while (avcodec_receive_frame(codec_ctx.get(), frm.get()) == 0) {
 
-            GLContext& gl_ctx = tl.api();
-
-            if (lumaext::extract_luma_32x32(gl_ctx, va_dpy,
-                    frm.get(), gray.data())) {
-                if constexpr (kDumpFrames) {
-                    std::ostringstream ss;
-                    ss << "hw_" << std::setw(6) << std::setfill('0') << hashes.size() << ".pgm";
-                    write_pgm(dumpDir / ss.str(), gray.data(),
-                        constants::kOutW, constants::kOutH,
-                        constants::kOutW); // packed 32 × 32
-                }
-                if (auto h = compute_phash_from_preprocessed(gray.data()))
-                    hashes.push_back(*h);
-            }
-
-            av_frame_unref(frm.get());
-            if (max_frames > 0 && (int)hashes.size() >= max_frames)
+        if (sret == AVERROR(EAGAIN)) {
+            // Buffer full – normal condition, try receiving frames first
+            spdlog::debug("[hw] send_packet returned EAGAIN, need to receive frames first");
+            // Continue to receive_frame without sending more packets
+        } else if (sret == AVERROR(ENOSYS)) {
+            // Hardware acceleration not implemented - fatal
+            spdlog::error("[hw] Hardware acceleration not implemented ({}) → abort HW", ff_err2str(sret));
+            return {}; // immediate SW fallback
+        } else if (sret < 0) {
+            // All other errors (AVERROR_INVALIDDATA, EINVAL, etc) - increment error budget
+            if (handleSoftError(sret, "avcodec_send_packet"))
                 break;
-            if (max_frames > 0) {
-                int pct = int(hashes.size() * 100 / max_frames);
-                if (pct != lastPct) {
-                    progress(pct);
-                    lastPct = pct;
+            continue;
+        }
+
+        // Try to receive frames
+        bool need_more_packets = false;
+        while (!need_more_packets) {
+            int rret = avcodec_receive_frame(codec_ctx.get(), frm.get());
+
+            if (rret == 0) {
+                // Successfully received a frame
+                total_frames++;
+
+                int64_t cur_pts = frm->best_effort_timestamp;
+                bool keep = sample_hit(cur_pts, next_pts, step_pts);
+
+                if (keep) {
+                    if (!lumaext::extract_luma_32x32(tl.api(), va_dpy, frm.get(), gray.data())) {
+                        spdlog::warn("[hw] extract_luma_32x32 failed");
+                        bumpError();
+                    } else {
+                        if constexpr (kDumpFrames) {
+                            std::ostringstream ss;
+                            ss << "hw_" << std::setw(6) << std::setfill('0') << hashes.size() << ".pgm";
+                            write_pgm(dumpDir / ss.str(), gray.data(), constants::kOutW, constants::kOutH, constants::kOutW);
+                        }
+
+                        if (auto h = compute_phash_from_preprocessed(gray.data())) {
+                            hashes.push_back(*h);
+
+                            // Update progress based on frames or position
+                            if (max_frames > 0) {
+                                int pct = static_cast<int>(hashes.size() * 100 / max_frames);
+                                if (pct != lastPct && progress) {
+                                    progress(pct);
+                                    lastPct = pct;
+                                }
+                            } else if (duration_s > 0 && progress) {
+                                // Estimate progress based on timestamp when max_frames is not specified
+                                if (cur_pts != AV_NOPTS_VALUE) {
+                                    double current_sec = cur_pts * av_q2d(st->time_base);
+                                    int pct = static_cast<int>(current_sec * 100 / duration_s);
+                                    if (pct != lastPct) {
+                                        progress(pct);
+                                        lastPct = pct;
+                                    }
+                                }
+                            }
+                        } else {
+                            spdlog::warn("[hw] Failed to compute hash for frame");
+                            bumpError();
+                        }
+                    }
                 }
+
+                av_frame_unref(frm.get());
+            } else if (rret == AVERROR(EAGAIN)) {
+                need_more_packets = true; // Need more packets
+            } else if (rret == AVERROR_EOF) {
+                spdlog::info("[hw] Decoder signaled EOF, all frames decoded");
+                goto end_hw; // Finished cleanly
+            } else if (rret == AVERROR(ENOSYS)) {
+                // Hardware acceleration not implemented - fatal
+                spdlog::error("[hw] receive_frame ENOSYS - hardware acceleration not supported");
+                return {}; // Immediate fallback
+            } else if (rret == AVERROR_INVALIDDATA || rret == AVERROR(EINVAL)) {
+                // For consistency, treat these the same as in send_packet
+                if (handleSoftError(rret, "avcodec_receive_frame"))
+                    goto end_hw;
+                need_more_packets = true;
+            } else {
+                // Other errors
+                if (handleSoftError(rret, "avcodec_receive_frame"))
+                    goto end_hw;
+                need_more_packets = true;
             }
         }
     }
+
+end_hw:
+    if (tooManyErrors()) {
+        spdlog::info("[hw] Too many errors, falling back to SW decoding after processing {} frames", total_frames);
+        return {}; // exhausted budget – fallback
+    }
+
+    spdlog::info("[hw] Successfully processed {} frames, extracted {} hashes", total_frames, hashes.size());
     return hashes;
 }
 
@@ -366,6 +526,8 @@ std::vector<uint64_t> decode_and_hash_sw(
         return {};
     }
     AVStream* st = fmt->streams[vstream];
+    int64_t const step_pts = util::sec_to_pts(1.0, st->time_base); // 1 s step
+    int64_t next_pts = 0;                                          // first target (may be overwritten after seek)
 
     /* ─────────────── determine/override duration (caller may give 0) ─── */
     if (st->duration != AV_NOPTS_VALUE) {
@@ -396,9 +558,6 @@ std::vector<uint64_t> decode_and_hash_sw(
     codec_ctx->thread_type = FF_THREAD_SLICE;
     codec_ctx->thread_count = std::max(1u, std::thread::hardware_concurrency());
     spdlog::info("[sw] Using {} threads for SW decoding", codec_ctx->thread_count);
-
-    /* decode only key-frames */
-    codec_ctx->skip_frame = AVDISCARD_NONKEY; // discard every non-key frame
 
     int err = avcodec_open2(codec_ctx.get(), dec, nullptr);
     if (err < 0) {
@@ -449,6 +608,7 @@ std::vector<uint64_t> decode_and_hash_sw(
             if (avformat_seek_file(fmt.get(), vstream, INT64_MIN, seek_pts, INT64_MAX, AVSEEK_FLAG_BACKWARD) >= 0) {
                 avcodec_flush_buffers(codec_ctx.get());
                 spdlog::info("[seek] jumped to {:.1f}%", pct * 100);
+                next_pts = seek_pts;
             } else {
                 spdlog::warn("[seek] avformat_seek_file failed, decoding from start");
             }
@@ -472,7 +632,7 @@ std::vector<uint64_t> decode_and_hash_sw(
     bool fatal_error = false;
 
     while (!fatal_error && !stopped && av_read_frame(fmt.get(), pkt.get()) >= 0) {
-        if (pkt->stream_index != vstream || !(pkt->flags & AV_PKT_FLAG_KEY)) {
+        if (pkt->stream_index != vstream) {
             av_packet_unref(pkt.get());
             continue;
         }
@@ -510,40 +670,48 @@ std::vector<uint64_t> decode_and_hash_sw(
                     break;
                 }
 
-                // got a frame → process
-                ++frames_seen;
-                AVFrame* src = frm.get();
-                if (swsCtx) {
-                    int h = sws_scale(swsCtx.get(), frm->data, frm->linesize, 0, frm->height,
-                        gray->data, gray->linesize);
-                    if (h != frm->height)
-                        spdlog::warn("[sw] sws_scale short: {}/{}", h, frm->height);
-                    src = gray.get();
-                }
+                int64_t frame_pts = (frm->pts != AV_NOPTS_VALUE)
+                    ? frm->pts
+                    : frm->best_effort_timestamp; // fallback
 
-                if constexpr (kDumpFrames) {
-                    // we dump the *original* (pre-mean / pre-resize) luma plane
-                    uint8_t const* dumpPlane = (codec_ctx->pix_fmt == AV_PIX_FMT_GRAY8)
-                        ? src->data[0]
-                        : gray->data[0];
-                    int dumpStride = (codec_ctx->pix_fmt == AV_PIX_FMT_GRAY8)
-                        ? src->linesize[0]
-                        : gray->linesize[0];
-                    std::ostringstream ss;
-                    ss << "sw_" << std::setw(6) << std::setfill('0') << hashes.size() << ".pgm";
-                    write_pgm(dumpDir / ss.str(), dumpPlane, src->width, src->height, dumpStride);
-                }
+                if (frame_pts == AV_NOPTS_VALUE || frame_pts >= next_pts) {
+                    // got a frame → process
+                    ++frames_seen;
+                    AVFrame* src = frm.get();
+                    if (swsCtx) {
+                        int h = sws_scale(swsCtx.get(), frm->data, frm->linesize, 0, frm->height,
+                            gray->data, gray->linesize);
+                        if (h != frm->height)
+                            spdlog::warn("[sw] sws_scale short: {}/{}", h, frm->height);
+                        src = gray.get();
+                    }
 
-                if (auto h = compute_phash_full(src->data[0], src->width, src->height)) {
-                    hashes.push_back(*h);
-                    if (max_frames > 0) {
-                        int pct_now = int(hashes.size() * 100 / max_frames);
-                        if (pct_now != last_progress && pct_now <= 100) {
-                            last_progress = pct_now;
-                            report_progress(on_progress, pct_now);
+                    if constexpr (kDumpFrames) {
+                        // we dump the *original* (pre-mean / pre-resize) luma plane
+                        uint8_t const* dumpPlane = (codec_ctx->pix_fmt == AV_PIX_FMT_GRAY8)
+                            ? src->data[0]
+                            : gray->data[0];
+                        int dumpStride = (codec_ctx->pix_fmt == AV_PIX_FMT_GRAY8)
+                            ? src->linesize[0]
+                            : gray->linesize[0];
+                        std::ostringstream ss;
+                        ss << "sw_" << std::setw(6) << std::setfill('0') << hashes.size() << ".pgm";
+                        write_pgm(dumpDir / ss.str(), dumpPlane, src->width, src->height, dumpStride);
+                    }
+
+                    if (auto h = compute_phash_full(src->data[0], src->width, src->height)) {
+                        hashes.push_back(*h);
+                        if (max_frames > 0) {
+                            int pct_now = int(hashes.size() * 100 / max_frames);
+                            if (pct_now != last_progress && pct_now <= 100) {
+                                last_progress = pct_now;
+                                report_progress(on_progress, pct_now);
+                            }
                         }
                     }
-                }
+
+                    next_pts += step_pts; // advance to next second
+                } // else: silently skip frame
 
                 av_frame_unref(frm.get());
 
@@ -569,12 +737,22 @@ decode_done:
                 spdlog::warn("[ffmpeg-sw] flush receive_frame: {}", ff_err2str(rret));
                 break;
             }
-            ++frames_seen;
-            AVFrame* src = frm.get();
-            if (swsCtx)
-                sws_scale(swsCtx.get(), frm->data, frm->linesize, 0, frm->height, gray->data, gray->linesize), src = gray.get();
-            if (auto h = compute_phash_full(src->data[0], src->width, src->height))
-                hashes.push_back(*h);
+
+            int64_t frame_pts = (frm->pts != AV_NOPTS_VALUE)
+                ? frm->pts
+                : frm->best_effort_timestamp; // fallback
+
+            if (frame_pts == AV_NOPTS_VALUE || frame_pts >= next_pts) {
+                ++frames_seen;
+                AVFrame* src = frm.get();
+                if (swsCtx)
+                    sws_scale(swsCtx.get(), frm->data, frm->linesize, 0, frm->height, gray->data, gray->linesize), src = gray.get();
+                if (auto h = compute_phash_full(src->data[0], src->width, src->height))
+                    hashes.push_back(*h);
+
+                next_pts += step_pts; // advance to next second
+            } // else: silently skip frame
+
             av_frame_unref(frm.get());
             if (max_frames > 0 && int(hashes.size()) >= max_frames)
                 break;
