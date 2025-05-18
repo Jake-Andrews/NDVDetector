@@ -40,6 +40,7 @@ enum class Err {
 // shared static shaders are created once per process.
 
 bool extract_luma_32x32(GLContext& glCtx, VADisplay va, AVFrame const* frame, std::uint8_t* dst) noexcept;
+bool extract_luma_32x32(GLContext& glCtx, AVFrame const* frame, std::uint8_t* dst) noexcept;
 
 // Retrieve error from the most recent call in this thread
 Err last_error() noexcept;

@@ -22,9 +22,11 @@
 #include <iomanip>
 
 // saves frames to fs for debugging
-static constexpr bool kDumpFrames = true;
-static constexpr double kSamplePeriod = 1.0; // seconds → 1 FPS
-static constexpr int kMaxHwErrors = 30;      // non‑fatal errors before abandoning HW
+static constexpr bool KDUMPFRAMES = false;
+static constexpr double KSAMPLEPERIOD = 1.0; // seconds → 1 FPS
+static constexpr int KMAXHWERRORS = 30;      // non‑fatal errors before abandoning HW
+static constexpr uint64_t ALLBLACK = 0x0000000000000000ULL;
+static constexpr uint64_t ALLONECOLOUR = 0x8000000000000000ULL;
 
 static void write_pgm(std::filesystem::path const& file,
     uint8_t const* data, int w, int h, int stride)
@@ -50,7 +52,6 @@ extern "C" {
 #include <libavutil/imgutils.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/pixfmt.h>
-#include <libswscale/swscale.h>
 
 #include <va/va.h>
 #include <va/va_drmcommon.h>
@@ -84,16 +85,16 @@ struct CDeleter {
             Fn(&p);
     }
 };
-struct SwsDeleter {
-    void operator()(SwsContext* c) const noexcept { sws_freeContext(c); }
-};
+// struct SwsDeleter {
+//     void operator()(SwsContext* c) const noexcept { sws_freeContext(c); }
+// };
 
 using FmtPtr = std::unique_ptr<AVFormatContext, CDeleter<&avformat_close_input>>;
 using CtxPtr = std::unique_ptr<AVCodecContext, CDeleter<&avcodec_free_context>>;
 using FrmPtr = std::unique_ptr<AVFrame, CDeleter<&av_frame_free>>;
 using PktPtr = std::unique_ptr<AVPacket, CDeleter<&av_packet_free>>;
 using BufPtr = std::unique_ptr<AVBufferRef, CDeleter<&av_buffer_unref>>;
-using SwsPtr = std::unique_ptr<SwsContext, SwsDeleter>;
+// using SwsPtr = std::unique_ptr<SwsContext, SwsDeleter>;
 
 inline char const* ff_err2str(int e)
 {
@@ -195,8 +196,10 @@ using util::sec_to_pts;
 
 static inline bool sample_hit(int64_t pts, int64_t& next_pts, int64_t step)
 {
-    if (pts == AV_NOPTS_VALUE)
-        return false;
+    if (pts == AV_NOPTS_VALUE) {
+        next_pts += step;
+        return true;
+    }
     if (pts >= next_pts) {
         next_pts += step;
         return true;
@@ -207,7 +210,7 @@ static inline bool sample_hit(int64_t pts, int64_t& next_pts, int64_t step)
 // VA‑API  →  dma‑buf (luma)  →  EGLImage  →  GL compute shader
 std::vector<uint64_t> decode_and_hash_hw_gl(
     std::string const& file,
-    double skip_sec,
+    double skip_pct,
     int duration_s,
     int max_frames,
     std::function<void(int)> const& progress)
@@ -249,14 +252,22 @@ std::vector<uint64_t> decode_and_hash_hw_gl(
             duration_s = int(fmt->duration / AV_TIME_BASE);
     }
 
-    // Apply skip_sec by setting start time
-    if (skip_sec > 0) {
-        int64_t skip_pts = sec_to_pts(skip_sec, st->time_base);
-        if (skip_pts > 0) {
-            spdlog::info("[hw] Seeking to {} seconds", skip_sec);
-            if (av_seek_frame(fmt.get(), vstream, skip_pts, AVSEEK_FLAG_BACKWARD) < 0) {
-                spdlog::warn("[hw] Seek failed, starting from beginning");
-            }
+    // short-clip → no skip (this avoids skipping past the last keyframe and
+    // being unable to decode)
+    double pct = std::clamp(skip_pct, 0.0, 0.20);
+    qint64 file_sz = QFileInfo(QString::fromStdString(file)).size();
+    if ((duration_s > 0 && duration_s < 20) || file_sz < 5 * 1024 * 1024)
+        pct = 0.0;
+
+    // Compute seek target and initial next_pts
+    int64_t skip_pts = pct > 0.0
+        ? sec_to_pts(pct * duration_s, st->time_base)
+        : 0;
+    int64_t next_pts = skip_pts; // declare and initialise local counter
+    if (skip_pts > 0) {
+        spdlog::info("[hw] Seeking to {:.1f}% ({} seconds)", pct * 100, pct * duration_s);
+        if (av_seek_frame(fmt.get(), vstream, skip_pts, AVSEEK_FLAG_BACKWARD) < 0) {
+            spdlog::warn("[hw] Seek failed, starting from beginning");
         }
     }
 
@@ -313,18 +324,17 @@ std::vector<uint64_t> decode_and_hash_hw_gl(
     glpipe::Mean32PipelineGL pipe(tl.api());
     std::array<uint8_t, constants::kOutW * constants::kOutH> gray;
     std::filesystem::path dumpDir;
-    if constexpr (kDumpFrames) {
+    if constexpr (KDUMPFRAMES) {
         dumpDir = std::filesystem::path("frames") / QFileInfo(QString::fromStdString(file)).completeBaseName().toStdString();
         std::filesystem::create_directories(dumpDir);
     }
 
     // ── sampling control ──
-    int64_t step_pts = sec_to_pts(kSamplePeriod, st->time_base);
+    int64_t step_pts = sec_to_pts(KSAMPLEPERIOD, st->time_base);
     if (step_pts <= 0) {
         spdlog::warn("[hw] Invalid step_pts calculated, forcing to 1");
         step_pts = 1;
     }
-    int64_t next_pts = 0;
 
     FrmPtr frm(av_frame_alloc());
     if (!frm) {
@@ -343,10 +353,10 @@ std::vector<uint64_t> decode_and_hash_hw_gl(
     int64_t total_frames = 0; // Track total frames processed for progress reporting
 
     // Define error classification functions
-    auto tooManyErrors = [&]() { return errorBudget >= kMaxHwErrors; };
+    auto tooManyErrors = [&]() { return errorBudget >= KMAXHWERRORS; };
     auto bumpError = [&]() {
-        if (++errorBudget == kMaxHwErrors)
-            spdlog::warn("[hw] error budget exhausted ({} errors) – falling back to SW", kMaxHwErrors);
+        if (++errorBudget == KMAXHWERRORS)
+            spdlog::warn("[hw] error budget exhausted ({} errors) – falling back to SW", KMAXHWERRORS);
     };
 
     // Define consistent error handlers
@@ -419,14 +429,19 @@ std::vector<uint64_t> decode_and_hash_hw_gl(
                         spdlog::warn("[hw] extract_luma_32x32 failed ({})", lumaext::to_string(lumaext::last_error()));
                         bumpError();
                     } else {
-                        if constexpr (kDumpFrames) {
+                        if constexpr (KDUMPFRAMES) {
                             std::ostringstream ss;
                             ss << "hw_" << std::setw(6) << std::setfill('0') << hashes.size() << ".pgm";
                             write_pgm(dumpDir / ss.str(), gray.data(), constants::kOutW, constants::kOutH, constants::kOutW);
                         }
 
                         if (auto h = compute_phash_from_preprocessed(gray.data())) {
-                            hashes.push_back(*h);
+
+                            if (h != ALLBLACK && h != ALLONECOLOUR) {
+                                hashes.push_back(*h);
+                            } else {
+                                spdlog::info("[hw] Skipping hash that represents an image that is entirely one colour");
+                            }
 
                             // Update progress based on frames or position
                             if (max_frames > 0) {
@@ -496,6 +511,14 @@ std::vector<uint64_t> decode_and_hash_sw(
     std::function<void(int)> const& on_progress)
 {
     using namespace util;
+
+    // Ensure we have a GL context for luma extraction
+    auto& tl = gl::ThreadLocalContext::current();
+    if (!tl.ensure_current()) {
+        spdlog::error("[sw] Failed to create/activate GL context");
+        return {};
+    }
+    std::array<uint8_t, constants::kOutW * constants::kOutH> lumaTile;
 
     spdlog::info("[sw] decoding '{}' (skip={}%, duration={} s, limit={})",
         file, skip_pct * 100, duration_s, max_frames);
@@ -568,30 +591,6 @@ std::vector<uint64_t> decode_and_hash_sw(
     /* ───────────────────── pre‑allocate frames/packets ────────────────── */
     FrmPtr frm { av_frame_alloc() };
     PktPtr pkt { av_packet_alloc() };
-    SwsPtr swsCtx;
-
-    // Phash requires grayscale, need to convert if not already gray8
-    if (codec_ctx->pix_fmt != AV_PIX_FMT_GRAY8) {
-        // SWS_POINT is used by the official PHash algorithm
-        swsCtx.reset(sws_getContext(codec_ctx->width, codec_ctx->height, codec_ctx->pix_fmt,
-            codec_ctx->width, codec_ctx->height, AV_PIX_FMT_GRAY8,
-            SWS_POINT, nullptr, nullptr, nullptr));
-        if (!swsCtx) {
-            spdlog::error("[sw] Failed to create SwsContext → abort");
-            return {};
-        }
-    } else {
-        spdlog::debug("[sw] Input format is already GRAY8, no scaling needed.");
-    }
-
-    FrmPtr gray { av_frame_alloc() };
-    gray->format = AV_PIX_FMT_GRAY8;
-    gray->width = codec_ctx->width;
-    gray->height = codec_ctx->height;
-    if (av_frame_get_buffer(gray.get(), 32) < 0) {
-        spdlog::error("[sw] Failed to alloc gray buffer");
-        return {};
-    }
 
     /* ───────────────────────────── seeking logic ─────────────────────── */
     double pct = std::clamp(skip_pct, 0.0, 0.20);
@@ -622,7 +621,7 @@ std::vector<uint64_t> decode_and_hash_sw(
     hashes.reserve(max_frames > 0 ? max_frames : 128);
 
     std::filesystem::path dumpDir;
-    if constexpr (kDumpFrames) {
+    if constexpr (KDUMPFRAMES) {
         dumpDir = std::filesystem::path("frames") / QFileInfo(QString::fromStdString(file)).completeBaseName().toStdString();
         std::filesystem::create_directories(dumpDir);
     }
@@ -677,37 +676,26 @@ std::vector<uint64_t> decode_and_hash_sw(
                 if (frame_pts == AV_NOPTS_VALUE || frame_pts >= next_pts) {
                     // got a frame → process
                     ++frames_seen;
-                    AVFrame* src = frm.get();
-                    if (swsCtx) {
-                        int h = sws_scale(swsCtx.get(), frm->data, frm->linesize, 0, frm->height,
-                            gray->data, gray->linesize);
-                        if (h != frm->height)
-                            spdlog::warn("[sw] sws_scale short: {}/{}", h, frm->height);
-                        src = gray.get();
-                    }
-
-                    if constexpr (kDumpFrames) {
-                        // we dump the *original* (pre-mean / pre-resize) luma plane
-                        uint8_t const* dumpPlane = (codec_ctx->pix_fmt == AV_PIX_FMT_GRAY8)
-                            ? src->data[0]
-                            : gray->data[0];
-                        int dumpStride = (codec_ctx->pix_fmt == AV_PIX_FMT_GRAY8)
-                            ? src->linesize[0]
-                            : gray->linesize[0];
-                        std::ostringstream ss;
-                        ss << "sw_" << std::setw(6) << std::setfill('0') << hashes.size() << ".pgm";
-                        write_pgm(dumpDir / ss.str(), dumpPlane, src->width, src->height, dumpStride);
-                    }
-
-                    if (auto h = compute_phash_full(src->data[0], src->width, src->height)) {
-                        hashes.push_back(*h);
-                        if (max_frames > 0) {
-                            int pct_now = int(hashes.size() * 100 / max_frames);
-                            if (pct_now != last_progress && pct_now <= 100) {
-                                last_progress = pct_now;
-                                report_progress(on_progress, pct_now);
+                    if (lumaext::extract_luma_32x32(tl.api(), frm.get(), lumaTile.data())) {
+                        if constexpr (KDUMPFRAMES) {
+                            std::ostringstream ss;
+                            ss << "sw_" << std::setw(6) << std::setfill('0') << hashes.size() << ".pgm";
+                            write_pgm(dumpDir / ss.str(), lumaTile.data(),
+                                constants::kOutW, constants::kOutH, constants::kOutW);
+                        }
+                        if (auto h = compute_phash_from_preprocessed(lumaTile.data())) {
+                            hashes.push_back(*h);
+                            if (max_frames > 0) {
+                                int pct_now = int(hashes.size() * 100 / max_frames);
+                                if (pct_now != last_progress && pct_now <= 100) {
+                                    last_progress = pct_now;
+                                    report_progress(on_progress, pct_now);
+                                }
                             }
                         }
+                    } else {
+                        spdlog::warn("[sw] luma extractor failed ({})",
+                            lumaext::to_string(lumaext::last_error()));
                     }
 
                     next_pts += step_pts; // advance to next second
@@ -744,11 +732,19 @@ decode_done:
 
             if (frame_pts == AV_NOPTS_VALUE || frame_pts >= next_pts) {
                 ++frames_seen;
-                AVFrame* src = frm.get();
-                if (swsCtx)
-                    sws_scale(swsCtx.get(), frm->data, frm->linesize, 0, frm->height, gray->data, gray->linesize), src = gray.get();
-                if (auto h = compute_phash_full(src->data[0], src->width, src->height))
-                    hashes.push_back(*h);
+                if (lumaext::extract_luma_32x32(tl.api(), frm.get(), lumaTile.data())) {
+                    if constexpr (KDUMPFRAMES) {
+                        std::ostringstream ss;
+                        ss << "sw_" << std::setw(6) << std::setfill('0') << hashes.size() << ".pgm";
+                        write_pgm(dumpDir / ss.str(), lumaTile.data(),
+                            constants::kOutW, constants::kOutH, constants::kOutW);
+                    }
+                    if (auto h = compute_phash_from_preprocessed(lumaTile.data()))
+                        hashes.push_back(*h);
+                } else {
+                    spdlog::warn("[sw] luma extractor failed ({})",
+                        lumaext::to_string(lumaext::last_error()));
+                }
 
                 next_pts += step_pts; // advance to next second
             } // else: silently skip frame

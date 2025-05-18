@@ -28,6 +28,7 @@
 extern "C" {
 #include <libavutil/frame.h>
 #include <libavutil/pixdesc.h>
+#include <libavutil/pixfmt.h>
 #include <va/va.h>
 #include <va/va_drmcommon.h>
 }
@@ -67,9 +68,6 @@ inline void _set_err(Err e) noexcept { g_last_err = e; }
 Err last_error() noexcept { return g_last_err; }
 
 namespace _detail {
-
-constexpr int kTileW = 32;
-constexpr int kTileH = 32;
 
 // RAII helper for original VA DRM_PRIME FDs
 struct OriginalVADRMPRIMEfdsCloser {
@@ -289,7 +287,7 @@ uniform sampler2D tex0; uniform bool rgbMode; uniform vec2 texelSize;
 float applyMeanFilter(sampler2D tex, vec2 tc, vec2 px, bool rgb){
     float sum=0.0; const int f=7, h=f/2; for(int y=-h;y<=h;++y) for(int x=-h;x<=h;++x){
         vec2 off=vec2(x,y)*px; vec4 t=texture(tex,tc+off);
-        float l=rgb?dot(t.rgb,vec3(0.2126,0.7152,0.0722)):t.r; sum+=l; }
+        float l=rgb?dot(t.rgb,vec3(0.2990,0.5870,0.1140)):t.r; sum+=l; }
     return sum/float(f*f);
 }
 void main(){ float y=applyMeanFilter(tex0,v,texelSize,rgbMode); C=vec4(y,y,y,1.0);} )GLSL";
@@ -334,7 +332,7 @@ void main(){ float y=applyMeanFilter(tex0,v,texelSize,rgbMode); C=vec4(y,y,y,1.0
     // output R8 texture
     glGenTextures(1, rTex_id.get());
     glBindTexture(GL_TEXTURE_2D, *rTex_id);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, kTileW, kTileH, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, lumaext::kTileW, lumaext::kTileH, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
@@ -363,7 +361,7 @@ bool GLModule::bindAndSetup(bool rgbLike, int w, int h)
     if (texelSizeLoc >= 0)
         glUniform2f(texelSizeLoc, 1.f / float(w), 1.f / float(h));
     glBindFramebuffer(GL_FRAMEBUFFER, *fbo_id);
-    glViewport(0, 0, kTileW, kTileH);
+    glViewport(0, 0, lumaext::kTileW, lumaext::kTileH);
     glBindVertexArray(vao);
     return true;
 }
@@ -456,6 +454,8 @@ bool extract_luma_32x32(GLContext& glCtx, VADisplay va, AVFrame const* frame, st
         glBindTexture(GL_TEXTURE_2D, srcTex);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, img.img);
         if (glGetError() != GL_NO_ERROR) {
             glDeleteTextures(1, &srcTex);
@@ -480,7 +480,7 @@ bool extract_luma_32x32(GLContext& glCtx, VADisplay va, AVFrame const* frame, st
         }
 
         glFinish();
-        glReadPixels(0, 0, _detail::kTileW, _detail::kTileH, GL_RED, GL_UNSIGNED_BYTE, dst);
+        glReadPixels(0, 0, lumaext::kTileW, lumaext::kTileH, GL_RED, GL_UNSIGNED_BYTE, dst);
         if (glGetError() != GL_NO_ERROR) {
             glDeleteTextures(1, &srcTex);
             _set_err(Err::GLImportFailed);
@@ -499,3 +499,187 @@ bool extract_luma_32x32(GLContext& glCtx, VADisplay va, AVFrame const* frame, st
 }
 
 } // namespace lumaext
+
+// ────────────────────────────────────────────────────────────────
+//   Host-memory variant (software-decoded frames)
+// ────────────────────────────────────────────────────────────────
+bool lumaext::extract_luma_32x32(GLContext& glCtx,
+    AVFrame const* frame,
+    std::uint8_t* dst) noexcept
+{
+    using namespace _detail;
+    _set_err(Err::Ok);
+
+    try {
+        glCtx.makeCurrent();
+        if (!frame || !dst) {
+            _set_err(Err::NotInitialised);
+            return false;
+        }
+
+        AVPixelFormat fmt = static_cast<AVPixelFormat>(frame->format);
+        auto const* pd = av_pix_fmt_desc_get(fmt);
+        if (!pd) {
+            _set_err(Err::UnsupportedFormat);
+            return false;
+        }
+
+        // --- A.1: bit depth and planar Y detection ---
+        int const bitDepth = pd->comp[0].depth; // FIXED
+
+        // ---- A.2: classify input ------------------------------------------------
+        enum class Kind { Y8,
+            Y16,
+            RGB8,
+            Unsupported };
+        Kind kind = Kind::Unsupported;
+
+        switch (fmt) {
+        case AV_PIX_FMT_GRAY8:
+        case AV_PIX_FMT_YUV420P:
+        case AV_PIX_FMT_YUV422P:
+        case AV_PIX_FMT_YUV444P:
+        case AV_PIX_FMT_NV12:
+        case AV_PIX_FMT_NV21:
+            kind = Kind::Y8;
+            break;
+
+        case AV_PIX_FMT_YUV420P10LE:
+        case AV_PIX_FMT_YUV422P10LE:
+        case AV_PIX_FMT_YUV444P10LE:
+        case AV_PIX_FMT_YUV420P12LE:
+        case AV_PIX_FMT_YUV422P12LE:
+        case AV_PIX_FMT_YUV444P12LE:
+        case AV_PIX_FMT_YUV420P16LE:
+        case AV_PIX_FMT_YUV422P16LE:
+        case AV_PIX_FMT_YUV444P16LE:
+        case AV_PIX_FMT_P010LE:
+        case AV_PIX_FMT_P016LE:
+            kind = Kind::Y16;
+            break;
+
+        case AV_PIX_FMT_RGB24:
+        case AV_PIX_FMT_BGR24:
+        case AV_PIX_FMT_RGBA:
+        case AV_PIX_FMT_BGRA:
+            kind = Kind::RGB8;
+            break;
+
+        default:
+            kind = Kind::Unsupported;
+            break;
+        }
+
+        if (kind == Kind::Unsupported) {
+            _set_err(Err::UnsupportedFormat);
+            return false;
+        }
+
+        // --- A.3: centralised upload logic ---
+        GLenum srcFmt = GL_RED;
+        GLenum intFmt = GL_R8;
+        int cpp = 1;
+        bool rgbLike = false;
+
+        if (kind == Kind::RGB8) {
+            rgbLike = true;
+            cpp = (fmt == AV_PIX_FMT_RGB24 || fmt == AV_PIX_FMT_BGR24) ? 3 : 4;
+            intFmt = (cpp == 3) ? GL_RGB8 : GL_RGBA8;
+            srcFmt = (fmt == AV_PIX_FMT_RGB24 || fmt == AV_PIX_FMT_RGBA) ? GL_RGB
+                : (cpp == 3)                                             ? GL_BGR
+                                                                         : GL_BGRA;
+        }
+
+        auto make_tight_8bit = [&](int bytesPerComponent) -> std::unique_ptr<uint8_t[]> {
+            int const outStride = frame->width;
+            auto buf = std::make_unique<uint8_t[]>(outStride * frame->height);
+
+            for (int y = 0; y < frame->height; ++y) {
+                uint8_t const* inRow;
+                if (frame->linesize[0] < 0)
+                    inRow = frame->data[0] + (frame->height - 1 - y) * (-frame->linesize[0]);
+                else
+                    inRow = frame->data[0] + y * frame->linesize[0];
+
+                if (bytesPerComponent == 1) {
+                    memcpy(buf.get() + y * outStride, inRow, frame->width);
+                } else {
+                    uint16_t const* src16 = reinterpret_cast<uint16_t const*>(inRow);
+                    uint8_t* dst8 = buf.get() + y * outStride;
+                    int const shift = bitDepth - 8;
+                    for (int x = 0; x < frame->width; ++x)
+                        dst8[x] = static_cast<uint8_t>(src16[x] >> shift);
+                }
+            }
+            return buf;
+        };
+
+        std::unique_ptr<uint8_t[]> tight;
+
+        if (kind == Kind::Y8) {
+            if (frame->linesize[0] != frame->width || frame->linesize[0] < 0) {
+                tight = make_tight_8bit(1);
+            }
+        } else if (kind == Kind::Y16) {
+            tight = make_tight_8bit(2);
+        }
+
+        if (kind == Kind::RGB8 && (frame->linesize[0] != frame->width * cpp || frame->linesize[0] < 0)) {
+            int const rowBytes = frame->width * cpp;
+            tight.reset(new uint8_t[rowBytes * frame->height]);
+            for (int y = 0; y < frame->height; ++y) {
+                uint8_t const* srcRow = frame->data[0] + (frame->linesize[0] < 0 ? (frame->height - 1 - y) * (-frame->linesize[0]) : y * frame->linesize[0]);
+                memcpy(tight.get() + y * rowBytes, srcRow, rowBytes);
+            }
+        }
+
+        void const* src = tight ? tight.get() : frame->data[0];
+        int strideUpload = (kind == Kind::RGB8) ? frame->width * cpp : frame->width;
+
+        GLuint tex = 0;
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, strideUpload / cpp);
+        glTexImage2D(GL_TEXTURE_2D, 0, intFmt, frame->width, frame->height, 0, srcFmt, GL_UNSIGNED_BYTE, src);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+
+        if (glGetError() != GL_NO_ERROR) {
+            glDeleteTextures(1, &tex);
+            _set_err(Err::GLImportFailed);
+            return false;
+        }
+
+        auto& mod = GLModule::instance();
+        if (!mod.ensureInitialized() || !mod.bindAndSetup(rgbLike, frame->width, frame->height)) {
+            glDeleteTextures(1, &tex);
+            _set_err(Err::NotInitialised);
+            return false;
+        }
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        glFinish();
+
+        glReadPixels(0, 0, lumaext::kTileW, lumaext::kTileH, GL_RED, GL_UNSIGNED_BYTE, dst);
+        GLenum err = glGetError();
+        glDeleteTextures(1, &tex);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        if (err != GL_NO_ERROR) {
+            _set_err(Err::GLImportFailed);
+            return false;
+        }
+        return true;
+    } catch (...) {
+        _set_err(Err::GLImportFailed);
+        return false;
+    }
+}
