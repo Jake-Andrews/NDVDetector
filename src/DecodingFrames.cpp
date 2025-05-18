@@ -17,29 +17,6 @@
 #include <QFileInfo>
 #include <spdlog/spdlog.h>
 
-#include <filesystem>
-#include <fstream>
-#include <iomanip>
-
-// saves frames to fs for debugging
-static constexpr bool KDUMPFRAMES = false;
-static constexpr double KSAMPLEPERIOD = 1.0; // seconds → 1 FPS
-static constexpr int KMAXHWERRORS = 30;      // non‑fatal errors before abandoning HW
-static constexpr uint64_t ALLBLACK = 0x0000000000000000ULL;
-static constexpr uint64_t ALLONECOLOUR = 0x8000000000000000ULL;
-
-static void write_pgm(std::filesystem::path const& file,
-    uint8_t const* data, int w, int h, int stride)
-{
-    std::ofstream os(file, std::ios::binary);
-    if (!os)
-        return;
-    os << "P5\n"
-       << w << ' ' << h << "\n255\n";
-    for (int y = 0; y < h; ++y)
-        os.write(reinterpret_cast<char const*>(data + y * stride), w);
-}
-
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -60,7 +37,10 @@ extern "C" {
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <functional>
+#include <iomanip>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -68,11 +48,27 @@ extern "C" {
 #include <thread>
 #include <vector>
 
-namespace constants {
-constexpr int kProbeSize = 10 * 1024 * 1024;
-constexpr int kAnalyzeUsec = 10 * 1'000'000;
-constexpr int kOutW = 32;
-constexpr int kOutH = 32;
+// saves frames to fs for debugging
+static constexpr double KSAMPLEPERIOD = 1.0; // seconds → 1 FPS
+static constexpr int KMAXHWERRORS = 30;      // non‑fatal errors before abandoning HW
+static constexpr uint64_t ALLBLACK = 0x0000000000000000ULL;
+static constexpr uint64_t ALLONECOLOUR = 0x8000000000000000ULL;
+static constexpr int KOUTH = 32;
+static constexpr int KOUTW = 32;
+static constexpr int KPROBESIZE = 10 * 1024 * 1024;
+static constexpr int KANALYZEUSEC = 10 * 1'000'000;
+
+static constexpr bool KDUMPFRAMES = false;
+static void write_pgm(std::filesystem::path const& file,
+    uint8_t const* data, int w, int h, int stride)
+{
+    std::ofstream os(file, std::ios::binary);
+    if (!os)
+        return;
+    os << "P5\n"
+       << w << ' ' << h << "\n255\n";
+    for (int y = 0; y < h; ++y)
+        os.write(reinterpret_cast<char const*>(data + y * stride), w);
 }
 
 namespace util {
@@ -85,16 +81,12 @@ struct CDeleter {
             Fn(&p);
     }
 };
-// struct SwsDeleter {
-//     void operator()(SwsContext* c) const noexcept { sws_freeContext(c); }
-// };
 
 using FmtPtr = std::unique_ptr<AVFormatContext, CDeleter<&avformat_close_input>>;
 using CtxPtr = std::unique_ptr<AVCodecContext, CDeleter<&avcodec_free_context>>;
 using FrmPtr = std::unique_ptr<AVFrame, CDeleter<&av_frame_free>>;
 using PktPtr = std::unique_ptr<AVPacket, CDeleter<&av_packet_free>>;
 using BufPtr = std::unique_ptr<AVBufferRef, CDeleter<&av_buffer_unref>>;
-// using SwsPtr = std::unique_ptr<SwsContext, SwsDeleter>;
 
 inline char const* ff_err2str(int e)
 {
@@ -322,7 +314,7 @@ std::vector<uint64_t> decode_and_hash_hw_gl(
 
     // ── GL + dump dir ──
     glpipe::Mean32PipelineGL pipe(tl.api());
-    std::array<uint8_t, constants::kOutW * constants::kOutH> gray;
+    std::array<uint8_t, KOUTW * KOUTH> gray;
     std::filesystem::path dumpDir;
     if constexpr (KDUMPFRAMES) {
         dumpDir = std::filesystem::path("frames") / QFileInfo(QString::fromStdString(file)).completeBaseName().toStdString();
@@ -432,7 +424,7 @@ std::vector<uint64_t> decode_and_hash_hw_gl(
                         if constexpr (KDUMPFRAMES) {
                             std::ostringstream ss;
                             ss << "hw_" << std::setw(6) << std::setfill('0') << hashes.size() << ".pgm";
-                            write_pgm(dumpDir / ss.str(), gray.data(), constants::kOutW, constants::kOutH, constants::kOutW);
+                            write_pgm(dumpDir / ss.str(), gray.data(), KOUTW, KOUTH, KOUTW);
                         }
 
                         if (auto h = compute_phash_from_preprocessed(gray.data())) {
@@ -518,7 +510,7 @@ std::vector<uint64_t> decode_and_hash_sw(
         spdlog::error("[sw] Failed to create/activate GL context");
         return {};
     }
-    std::array<uint8_t, constants::kOutW * constants::kOutH> lumaTile;
+    std::array<uint8_t, KOUTW * KOUTH> lumaTile;
 
     spdlog::info("[sw] decoding '{}' (skip={}%, duration={} s, limit={})",
         file, skip_pct * 100, duration_s, max_frames);
@@ -527,8 +519,8 @@ std::vector<uint64_t> decode_and_hash_sw(
     FmtPtr fmt;
     {
         AVDictionary* o = nullptr;
-        av_dict_set_int(&o, "probesize", constants::kProbeSize, 0);
-        av_dict_set_int(&o, "analyzeduration", constants::kAnalyzeUsec, 0);
+        av_dict_set_int(&o, "probesize", KPROBESIZE, 0);
+        av_dict_set_int(&o, "analyzeduration", KANALYZEUSEC, 0);
         AVFormatContext* raw = nullptr;
         int e = avformat_open_input(&raw, file.c_str(), nullptr, &o);
         av_dict_free(&o);
@@ -681,7 +673,7 @@ std::vector<uint64_t> decode_and_hash_sw(
                             std::ostringstream ss;
                             ss << "sw_" << std::setw(6) << std::setfill('0') << hashes.size() << ".pgm";
                             write_pgm(dumpDir / ss.str(), lumaTile.data(),
-                                constants::kOutW, constants::kOutH, constants::kOutW);
+                                KOUTW, KOUTH, KOUTW);
                         }
                         if (auto h = compute_phash_from_preprocessed(lumaTile.data())) {
                             hashes.push_back(*h);
@@ -737,7 +729,7 @@ decode_done:
                         std::ostringstream ss;
                         ss << "sw_" << std::setw(6) << std::setfill('0') << hashes.size() << ".pgm";
                         write_pgm(dumpDir / ss.str(), lumaTile.data(),
-                            constants::kOutW, constants::kOutH, constants::kOutW);
+                            KOUTW, KOUTH, KOUTW);
                     }
                     if (auto h = compute_phash_from_preprocessed(lumaTile.data()))
                         hashes.push_back(*h);
