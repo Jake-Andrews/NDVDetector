@@ -9,7 +9,7 @@ qt_add_executable(NDVDetector
 )
 
 target_include_directories(NDVDetector PRIVATE
-    ${CMAKE_SOURCE_DIR}/vendor/phash/third-party/CImg
+    ${CMAKE_SOURCE_DIR}/vendor/CImg
     ${CMAKE_SOURCE_DIR}/vendor/hftrie/include
     ${FFMPEG_ROOT}/include
 )

@@ -18,18 +18,15 @@ set(CMAKE_INCLUDE_PATH "${FFMPEG_ROOT}/include")
 set(CMAKE_LIBRARY_PATH "${FFMPEG_ROOT}/lib")
 set(ENV{PKG_CONFIG_PATH} "${FFMPEG_ROOT}/lib/pkgconfig")
 
-# FFmpeg components
 find_package(PkgConfig REQUIRED)
+
+# FFmpeg components
 pkg_check_modules(AVUTIL REQUIRED IMPORTED_TARGET libavutil)
 pkg_check_modules(AVCODEC REQUIRED IMPORTED_TARGET libavcodec)
 pkg_check_modules(AVFORMAT REQUIRED IMPORTED_TARGET libavformat)
 pkg_check_modules(AVFILTER REQUIRED IMPORTED_TARGET libavfilter)
 pkg_check_modules(SWSCALE REQUIRED IMPORTED_TARGET libswscale)
 pkg_check_modules(AVDEVICE REQUIRED IMPORTED_TARGET libavdevice)
-pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
-    libavdevice libavfilter libavformat libavcodec
-    libswresample libswscale libavutil
-)
 
 find_package(SQLite3 REQUIRED)
 find_package(spdlog REQUIRED)
