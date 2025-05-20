@@ -11,3 +11,5 @@ text.txt
 requirements.txt
 .aider*
 vendor/
+frames/
+random/

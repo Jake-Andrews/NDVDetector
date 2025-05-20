@@ -15,8 +15,9 @@ public:
     void process();
 
 signals:
-    void filesFound(int count);
-    void hashingProgress(int done, int total);
+    void searchProgress(int found);            
+    void metadataProgress(int done, int total); 
+    void hashProgress(int done, int total);    
     void error(QString message);
     void finished(std::vector<std::vector<VideoInfo>> duplicates);
 

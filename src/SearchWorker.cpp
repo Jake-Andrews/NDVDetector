@@ -98,6 +98,8 @@ void SearchWorker::process()
     // Lift global log-level if the caller hasn’t done so already
     spdlog::set_level(spdlog::level::debug);
 
+    emit searchProgress(0);
+
     try {
         spdlog::info("[worker] Starting search task");
 
@@ -114,10 +116,11 @@ void SearchWorker::process()
             }
 
             auto vids = getVideosFromPath(dir.path, m_cfg);
-            spdlog::info("[worker] Found {} videos in '{}'", vids.size(), dir.path);
-            allVideos.insert(allVideos.end(), vids.begin(), vids.end());
+            for (auto const& v : vids) { // iterate *each* file
+                allVideos.push_back(v);  // keep in master list
+                emit searchProgress(static_cast<int>(allVideos.size()));
+            }
         }
-        emit filesFound(static_cast<int>(allVideos.size()));
 
         // 2. Filter videos already known to the DB
         std::unordered_set<std::string> known;
@@ -188,47 +191,56 @@ void SearchWorker::doExtractionAndDetection(std::vector<VideoInfo>& videos)
     };
     // ───────────────────────────────────────────────────────────────────────
 
-    int hashedCount = 0;
-    int totalToHash = static_cast<int>(videos.size());
+    int metaDone = 0;
+    int metaTotal = static_cast<int>(videos.size());
+    emit metadataProgress(0, metaTotal);
 
     // Step A – metadata / thumbnail / initial DB insert
     spdlog::info("Thumbnail/FFprobe started");
 
-    std::erase_if(videos, [&](VideoInfo& v) {
+    std::vector<VideoInfo> filtered;
+    filtered.reserve(videos.size());
+    for (auto& v : videos) {
+        bool skip = false;
+
         if (!extract_info(v)) {
             spdlog::warn("[meta] Failed FFprobe extraction – skipping '{}'", v.path);
-            return true;
-        }
-
-        // Try to extract thumbnail
-        try {
-            if (auto opt = extract_color_thumbnail(v.path))
-                v.thumbnail_path = opt->toStdString();
-            else
+            skip = true;
+        } else {
+            // Try to extract thumbnail
+            try {
+                if (auto opt = extract_color_thumbnail(v.path))
+                    v.thumbnail_path = opt->toStdString();
+                else
+                    v.thumbnail_path = "./sneed.png"; // fallback logo
+            } catch (std::exception const& ex) {
+                spdlog::error("[thumbnail] Exception during thumbnail extraction: {}", ex.what());
                 v.thumbnail_path = "./sneed.png"; // fallback logo
-        } catch (std::exception const& ex) {
-            spdlog::error("[thumbnail] Exception during thumbnail extraction: {}", ex.what());
-            v.thumbnail_path = "./sneed.png"; // fallback logo
+            }
+
+            // Try to insert into database
+            if (auto id = m_db.insertVideo(v)) {
+                v.id = *id;
+            } else {
+                spdlog::error("[DB] Inserting metadata failed for '{}'", v.path);
+                skip = true;
+            }
         }
 
-        // Try to insert into database
-        if (auto id = m_db.insertVideo(v)) {
-            v.id = *id;
-            return false;
-        }
+        ++metaDone;
+        emit metadataProgress(metaDone, metaTotal);
 
-        spdlog::error("[DB] Inserting metadata failed for '{}'", v.path);
-        return true;
-    });
+        if (!skip)
+            filtered.push_back(std::move(v));
+    }
+    videos.swap(filtered);
 
     spdlog::info("Thumbnail/FFprobe finished");
     spdlog::info("Hashing started");
 
-    // Check the m_cfg.hwBackend, if AV_HWDEVICE_TYPE_NONE then no hardware
-    // accel
-    // If a hwBackend was chosen compare the video's codec, profile, and level
-    // to the hardware filters that the user created. If no filters were setup,
-    // then use the default filter for the chosen backend.
+    int hashedCount = 0;
+    int totalToHash = static_cast<int>(videos.size());
+    emit hashProgress(0, totalToHash);
 
     // Step B – pHash extraction & DB insertion
     for (auto const& v : videos) {
@@ -238,25 +250,13 @@ void SearchWorker::doExtractionAndDetection(std::vector<VideoInfo>& videos)
             // HW decoding is enabled only if backend is not CPU-only and video matches a filter
             bool allowHW = (m_cfg.hwBackend != AV_HWDEVICE_TYPE_NONE) && matchesAnyFilter(v);
 
-            // Create a capture for the progress callback to avoid capturing 'this' by reference
-            auto progressCallback = [worker = this, currentHashedCount = hashedCount,
-                                        totalVideos = totalToHash](int pct) {
-                // Forward fine-grained 0-100 information to the GUI thread safely
-                QMetaObject::invokeMethod(
-                    worker,
-                    [=] {
-                        worker->emit hashingProgress(currentHashedCount * 100 + pct, totalVideos * 100);
-                    },
-                    Qt::QueuedConnection);
-            };
-
             auto phashes = extract_phashes_from_video(
                 v.path,
                 kSkipPercent,
                 v.duration,
                 kMaxFrames,
                 allowHW,
-                progressCallback);
+                {});
 
             if (phashes.empty()) {
                 spdlog::warn("[hash] No hashes generated for '{}'", v.path);
@@ -273,16 +273,8 @@ void SearchWorker::doExtractionAndDetection(std::vector<VideoInfo>& videos)
             spdlog::error("[worker] Unknown exception while processing '{}'", v.path);
         }
 
-        // Update progress counter safely
         ++hashedCount;
-
-        // Notify UI of progress (this is safe to call from any thread with Qt)
-        QMetaObject::invokeMethod(
-            this,
-            [this, hashedCount, totalToHash] {
-                emit hashingProgress(hashedCount * 100, totalToHash * 100);
-            },
-            Qt::QueuedConnection);
+        emit hashProgress(hashedCount, totalToHash);
     }
 
     spdlog::info("Hashing finished: {} videos processed", hashedCount);

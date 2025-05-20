@@ -570,9 +570,14 @@ std::vector<uint64_t> decode_and_hash_sw(
     }
 
     /* multithreading BEFORE avcodec_open2() */
-    codec_ctx->thread_type = FF_THREAD_SLICE;
-    codec_ctx->thread_count = std::max(1u, std::thread::hardware_concurrency());
+    // files normally cary only one slice per frame, so FF_THREAD_SLICE provides
+    // no parallelism
+    codec_ctx->thread_type = FF_THREAD_FRAME;
+    // let FFmpeg decide
+    codec_ctx->thread_count = 0; // std::max(1u, std::thread::hardware_concurrency());
     spdlog::info("[sw] Using {} threads for SW decoding", codec_ctx->thread_count);
+    codec_ctx->skip_idct = AVDISCARD_ALL;
+    codec_ctx->skip_loop_filter = AVDISCARD_ALL;
 
     int err = avcodec_open2(codec_ctx.get(), dec, nullptr);
     if (err < 0) {

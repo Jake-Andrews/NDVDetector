@@ -27,12 +27,13 @@ void VideoController::startSearch()
         "Searching for videos...",
         "Cancel",
         0,
-        100, // placeholder, gets updated to the actual max # later
+        0, // indeterminate at first
         nullptr);
     progressDialog->setWindowTitle("Searching");
     progressDialog->setWindowModality(Qt::ApplicationModal);
     progressDialog->setAutoClose(false);
     progressDialog->setAutoReset(false);
+    progressDialog->setLabelText("Searching for videos…");
     progressDialog->show();
 
     QThread* thread = new QThread(this); // parent is this, so it cleans up
@@ -41,19 +42,31 @@ void VideoController::startSearch()
 
     // Connect signals/slots
     connect(thread, &QThread::started, worker, &SearchWorker::process);
-    // Update UI with # files found
-    connect(worker, &SearchWorker::filesFound, progressDialog, [progressDialog](int count) {
-        progressDialog->setLabelText(QString("Found %1 videos.\nScanning metadata...").arg(count));
-        progressDialog->setRange(0, count); // update the max to "count"
-    });
 
-    // Update hashing progress
-    connect(worker, &SearchWorker::hashingProgress, progressDialog,
-        [progressDialog](int done, int total) {
-            // setValue triggers the progress bar position
+    connect(worker, &SearchWorker::searchProgress,
+        progressDialog, [progressDialog](int found) {
+            progressDialog->setLabelText(
+                QString("Searching for videos… %1 found").arg(found));
+        });
+
+    connect(worker, &SearchWorker::metadataProgress,
+        progressDialog, [progressDialog](int done, int total) {
+            progressDialog->setRange(0, total);
             progressDialog->setValue(done);
             progressDialog->setLabelText(
-                QString("Hashing videos... %1/%2 done").arg(done).arg(total));
+                QString("Generating metadata/thumbnails… %1/%2")
+                    .arg(done)
+                    .arg(total));
+        });
+
+    connect(worker, &SearchWorker::hashProgress,
+        progressDialog, [progressDialog](int done, int total) {
+            progressDialog->setRange(0, total);
+            progressDialog->setValue(done);
+            progressDialog->setLabelText(
+                QString("Generating hashes… %1/%2")
+                    .arg(done)
+                    .arg(total));
         });
 
     // On error
