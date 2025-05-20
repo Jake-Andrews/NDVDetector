@@ -95,8 +95,7 @@ inline void report_progress(std::function<void(int)> const& cb, int pct)
 
 using util::sec_to_pts;
 
-// CPU-only luma extractor
-static bool extract_luma_32x32_cpu(AVFrame const* src, uint8_t* dst)
+static bool extract_luma_32x32(AVFrame const* src, uint8_t* dst)
 {
     static SwsContext* sws = nullptr;
     static int lastW = 0, lastH = 0, lastFmt = AV_PIX_FMT_NONE;
@@ -131,9 +130,27 @@ std::vector<uint64_t> decode_and_hash(
     int max_frames,
     std::function<void(int)> const& on_progress)
 {
+    // ------ early validation / fast failure -----------------
+    if (file.empty() || !std::filesystem::exists(file)) {
+        spdlog::error("[sw] decode_and_hash: file '{}' not found", file);
+        util::report_progress(on_progress, 100);
+        return {};
+    }
+    if (max_frames == 0) // caller asked for nothing
+        return {};
+
+    // Reserve a sensible capacity up-front (makes push_back O(1))
+    size_t est = (max_frames > 0) ? static_cast<size_t>(max_frames)
+                                  : (duration_s > 0 ? static_cast<size_t>(duration_s / KSAMPLEPERIOD) + 1u
+                                                    : 128u);
+
     using namespace util;
     static std::once_flag ffOnce;
     std::call_once(ffOnce, [] { av_log_set_level(AV_LOG_WARNING); });
+
+#ifdef NDEBUG
+    av_log_set_level(AV_LOG_ERROR);
+#endif
 
     std::array<uint8_t, KOUTW * KOUTH> lumaTile;
 
@@ -151,23 +168,26 @@ std::vector<uint64_t> decode_and_hash(
         av_dict_free(&o);
         if (e < 0) {
             spdlog::error("[ffmpeg-sw] avformat_open_input: {}", ff_err2str(e));
+            util::report_progress(on_progress, 100);
             return {};
         }
         fmt.reset(raw);
     }
     if (int e = avformat_find_stream_info(fmt.get(), nullptr); e < 0) {
         spdlog::error("[ffmpeg-sw] stream_info: {}", ff_err2str(e));
+        util::report_progress(on_progress, 100);
         return {};
     }
 
     int vstream = av_find_best_stream(fmt.get(), AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
     if (vstream < 0) {
         spdlog::warn("[ffmpeg-sw] no video stream");
+        util::report_progress(on_progress, 100);
         return {};
     }
     AVStream* st = fmt->streams[vstream];
-    int64_t const step_pts = util::sec_to_pts(1.0, st->time_base); // 1 s step
-    int64_t next_pts = 0;                                          // first target (may be overwritten after seek)
+    int64_t const step_pts = util::sec_to_pts(KSAMPLEPERIOD, st->time_base);
+    int64_t next_pts = 0; // first target (may be overwritten after seek)
 
     /* ─────────────── determine/override duration (caller may give 0) ─── */
     if (st->duration != AV_NOPTS_VALUE) {
@@ -185,12 +205,14 @@ std::vector<uint64_t> decode_and_hash(
     AVCodec const* dec = avcodec_find_decoder(st->codecpar->codec_id);
     if (!dec) {
         spdlog::warn("[ffmpeg-sw] unsupported codec ID {}", static_cast<int>(st->codecpar->codec_id));
+        util::report_progress(on_progress, 100);
         return {};
     }
 
     CtxPtr codec_ctx { avcodec_alloc_context3(dec) };
     if (!codec_ctx || avcodec_parameters_to_context(codec_ctx.get(), st->codecpar) < 0) {
         spdlog::error("[ffmpeg-sw] avcodec_parameters_to_context failed");
+        util::report_progress(on_progress, 100);
         return {};
     }
 
@@ -198,8 +220,12 @@ std::vector<uint64_t> decode_and_hash(
     // files normally cary only one slice per frame, so FF_THREAD_SLICE provides
     // no parallelism
     codec_ctx->thread_type = FF_THREAD_FRAME;
-    // let FFmpeg decide
-    codec_ctx->thread_count = 0; // std::max(1u, std::thread::hardware_concurrency());
+    // Decode only reference frames, skip loop-filter & idct already set above
+    codec_ctx->skip_frame = AVDISCARD_NONREF;
+    // Let FFmpeg apply codec-specific fast flags
+    codec_ctx->flags2 |= AV_CODEC_FLAG2_FAST;
+    // Pick a sane explicit thread count (0 = FFmpeg default = may become 1)
+    codec_ctx->thread_count = std::max(1u, std::thread::hardware_concurrency());
     spdlog::info("[sw] Using {} threads for SW decoding", codec_ctx->thread_count);
     codec_ctx->skip_idct = AVDISCARD_ALL;
     codec_ctx->skip_loop_filter = AVDISCARD_ALL;
@@ -207,6 +233,7 @@ std::vector<uint64_t> decode_and_hash(
     int err = avcodec_open2(codec_ctx.get(), dec, nullptr);
     if (err < 0) {
         spdlog::error("[ffmpeg-sw] avcodec_open2 failed: {}", ff_err2str(err));
+        util::report_progress(on_progress, 100);
         return {};
     }
 
@@ -240,7 +267,7 @@ std::vector<uint64_t> decode_and_hash(
 
     /* ───────────────────── main decode / hash loop ───────────────────── */
     std::vector<uint64_t> hashes;
-    hashes.reserve(max_frames > 0 ? max_frames : 128);
+    hashes.reserve(est);
 
     std::filesystem::path dumpDir;
     if constexpr (KDUMPFRAMES) {
@@ -298,7 +325,7 @@ std::vector<uint64_t> decode_and_hash(
                 if (frame_pts == AV_NOPTS_VALUE || frame_pts >= next_pts) {
                     // got a frame → process
                     ++frames_seen;
-                    if (extract_luma_32x32_cpu(frm.get(), lumaTile.data())) {
+                    if (extract_luma_32x32(frm.get(), lumaTile.data())) {
                         if constexpr (KDUMPFRAMES) {
                             std::ostringstream ss;
                             ss << "sw_" << std::setw(6) << std::setfill('0') << hashes.size() << ".pgm";
@@ -353,7 +380,7 @@ decode_done:
 
             if (frame_pts == AV_NOPTS_VALUE || frame_pts >= next_pts) {
                 ++frames_seen;
-                if (extract_luma_32x32_cpu(frm.get(), lumaTile.data())) {
+                if (extract_luma_32x32(frm.get(), lumaTile.data())) {
                     if constexpr (KDUMPFRAMES) {
                         std::ostringstream ss;
                         ss << "sw_" << std::setw(6) << std::setfill('0') << hashes.size() << ".pgm";
@@ -361,7 +388,9 @@ decode_done:
                             KOUTW, KOUTH, KOUTW);
                     }
                     if (auto h = compute_phash_from_preprocessed(lumaTile.data()))
-                        hashes.push_back(*h);
+                        if (h != ALLBLACK || h != ALLONECOLOUR) {
+                            hashes.push_back(*h);
+                        }
                 } else {
                     spdlog::warn("[sw] luma extractor failed");
                 }
@@ -376,5 +405,6 @@ decode_done:
     }
 
     spdlog::info("[sw] finished: {} frames seen, {} hashes", frames_seen, hashes.size());
+    util::report_progress(on_progress, 100);
     return hashes;
 }

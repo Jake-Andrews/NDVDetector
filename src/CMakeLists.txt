@@ -30,7 +30,6 @@ target_link_libraries(NDVDetector PRIVATE
 
     Qt6::Widgets
     Qt6::Gui
-    Qt6::OpenGL
     Qt6::Core
     Qt6::Concurrent
 )

@@ -41,7 +41,7 @@ pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
 find_package(SQLite3 REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(nlohmann_json REQUIRED CONFIG)
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui OpenGL Concurrent)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui Concurrent)
 qt_standard_project_setup()
 
 add_subdirectory(vendor/phash)

@@ -1,8 +1,40 @@
 #include "Hash.h"
-#include <pHash.h>
 
 #include <iostream>
 #include <vector>
+
+static CImg<float> ph_dct_matrix(int const N)
+{
+    CImg<float> matrix(N, N, 1, 1, 1 / sqrt((float)N));
+    float const c1 = sqrt(2.0 / N);
+    for (int x = 0; x < N; x++) {
+        for (int y = 1; y < N; y++) {
+            matrix(x, y) = c1 * cos((cimg::PI / 2 / N) * y * (2 * x + 1));
+        }
+    }
+    return matrix;
+}
+
+static CImg<float> const dct_matrix = ph_dct_matrix(32);
+int ph_dct_imagehash_from_buffer(CImg<float> const& img, ulong& hash)
+{
+    CImg<float> const& C = dct_matrix;
+    CImg<float> Ctransp = C.get_transpose();
+
+    CImg<float> dctImage = (C)*img * Ctransp;
+
+    CImg<float> subsec = dctImage.crop(1, 1, 8, 8).unroll('x');
+
+    float median = subsec.median();
+    hash = 0;
+    for (int i = 0; i < 64; i++, hash <<= 1) {
+        float current = subsec(i);
+        if (current > median)
+            hash |= 0x01;
+    }
+
+    return 0;
+}
 
 std::vector<uint64_t> generate_pHashes(std::vector<CImg<float>> const& images)
 {

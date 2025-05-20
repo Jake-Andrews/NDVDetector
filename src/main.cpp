@@ -7,9 +7,6 @@
 #include <QCoreApplication>
 #include <QGuiApplication>
 #include <QMessageBox>
-#include <QtGui/QOffscreenSurface>
-#include <QtGui/QOpenGLContext>
-#include <QtGui/QSurfaceFormat>
 #include <spdlog/spdlog.h>
 
 int main(int argc, char* argv[])
