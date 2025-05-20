@@ -10,7 +10,6 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_compile_options(-fmax-errors=0)
-add_compile_definitions(CL_TARGET_OPENCL_VERSION=300)
 
 set(PHASH_DYNAMIC OFF CACHE BOOL "")
 set(PHASH_STATIC ON CACHE BOOL "")
@@ -39,19 +38,6 @@ pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
     libswresample libswscale libavutil
 )
 
-pkg_check_modules(EGL REQUIRED IMPORTED_TARGET egl)
-pkg_check_modules(DRM REQUIRED IMPORTED_TARGET libdrm)
-
-# GLEW static build (EGL-only, no GLX)
-set(GLEW_ROOT "$ENV{HOME}/opt/glew-egl/install")
-add_library(GLEW::GLEW STATIC IMPORTED)
-set_target_properties(GLEW::GLEW PROPERTIES
-    IMPORTED_LOCATION             "${GLEW_ROOT}/lib64/libGLEW.a"
-    INTERFACE_INCLUDE_DIRECTORIES "${GLEW_ROOT}/include"
-)
-
-# Remaining packages
-find_package(OpenGL REQUIRED)
 find_package(SQLite3 REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(nlohmann_json REQUIRED CONFIG)

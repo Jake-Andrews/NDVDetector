@@ -22,11 +22,6 @@ target_link_libraries(NDVDetector PRIVATE
     PkgConfig::SWSCALE
     PkgConfig::AVDEVICE
 
-    GLEW::GLEW
-    OpenGL::GL
-    PkgConfig::EGL
-    PkgConfig::DRM
-
     pHash
     hftrie
     SQLite::SQLite3
@@ -38,12 +33,6 @@ target_link_libraries(NDVDetector PRIVATE
     Qt6::OpenGL
     Qt6::Core
     Qt6::Concurrent
-)
-
-target_compile_definitions(NDVDetector PRIVATE
-    GLEW_STATIC
-    GLEW_EGL
-    GLEW_NO_GLX
 )
 
 qt_finalize_executable(NDVDetector)
