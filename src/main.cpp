@@ -11,10 +11,6 @@
 
 int main(int argc, char* argv[])
 {
-    // prevents qt from crashing when the file picker opens on x11
-    qputenv("QT_QPA_PLATFORMTHEME", QByteArray("none"));
-    QGuiApplication::setDesktopSettingsAware(false);
-
     QApplication app(argc, argv);
 
     // -- Qt meta types for signal/slot compatibility --
