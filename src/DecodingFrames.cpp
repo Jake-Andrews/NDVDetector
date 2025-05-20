@@ -1,6 +1,6 @@
 // DecodingFrames.cpp
 #include "DecodingFrames.h"
-#include "PHashCPU.h"
+#include "Hash.h"
 
 #include <QFileInfo>
 #include <spdlog/spdlog.h>

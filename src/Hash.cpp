@@ -1,6 +1,7 @@
 #include "Hash.h"
 
 #include <iostream>
+#include <optional>
 #include <vector>
 
 static CImg<float> ph_dct_matrix(int const N)
@@ -68,4 +69,45 @@ void print_pHashes(std::vector<Hash> const& results)
     for (auto const& r : results) {
         std::cout << " => Hash: " << r.value << "\n";
     }
+}
+
+std::optional<uint64_t>
+compute_phash_from_preprocessed(uint8_t const* gray)
+{
+    if (!gray)
+        return std::nullopt;
+
+    // Load 32×32 gray buffer into CImg<float>
+    CImg<float> img(gray, 32, 32, 1, 1);
+
+    uint64_t h = 0;
+    if (ph_dct_imagehash_from_buffer(img, h) < 0)
+        return std::nullopt;
+
+    return h;
+}
+
+std::optional<uint64_t>
+compute_phash_full(uint8_t const* data, int w, int h)
+{
+    if (!data || w <= 0 || h <= 0)
+        return std::nullopt;
+
+    // Make CImg copy, then 7×7 mean-filter and resize to 32×32
+    CImg<float> img(data, w, h, 1, 1);
+    static CImg<float> const mean7(7, 7, 1, 1, 1.f);
+
+    CImg<float> luma;
+    if (img.spectrum() >= 3)
+        luma = img.get_channels(0, 2).RGBtoYCbCr().channel(0);
+    else
+        luma = img.get_channel(0);
+
+    luma.convolve(mean7).resize(32, 32, -100, -100, 1);
+
+    uint64_t hash = 0;
+    if (ph_dct_imagehash_from_buffer(luma, hash) < 0)
+        return std::nullopt;
+
+    return hash;
 }
