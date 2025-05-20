@@ -22,7 +22,6 @@ target_link_libraries(NDVDetector PRIVATE
     PkgConfig::SWSCALE
     PkgConfig::AVDEVICE
 
-    pHash
     hftrie
     SQLite::SQLite3
     spdlog::spdlog

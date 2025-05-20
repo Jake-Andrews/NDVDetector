@@ -11,13 +11,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_compile_options(-fmax-errors=0)
 
-set(PHASH_DYNAMIC OFF CACHE BOOL "")
-set(PHASH_STATIC ON CACHE BOOL "")
-set(PHASH_BINDINGS OFF CACHE BOOL "")
-set(PHASH_EXAMPLES OFF CACHE BOOL "")
-set(WITH_AUDIO_HASH OFF CACHE BOOL "")
-set(WITH_VIDEO_HASH OFF CACHE BOOL "")
-
 # Local FFmpeg
 set(FFMPEG_ROOT "$ENV{HOME}/ffmpeg_build")
 set(CMAKE_PREFIX_PATH "${FFMPEG_ROOT}")
@@ -44,7 +37,6 @@ find_package(nlohmann_json REQUIRED CONFIG)
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui Concurrent)
 qt_standard_project_setup()
 
-add_subdirectory(vendor/phash)
 add_subdirectory(vendor/hftrie)
 add_subdirectory(src)
 
