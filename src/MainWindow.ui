@@ -68,18 +68,6 @@
         <item>
          <layout class="QHBoxLayout" name="bottomButtons">
           <item><widget class="QPushButton" name="searchButton"><property name="text"><string>Search</string></property></widget></item>
-          <item>
-           <layout class="QHBoxLayout">
-            <item><widget class="QLabel" name="hwDecodeLabel"><property name="text"><string>HW Decoder:</string></property></widget></item>
-            <item><widget class="QComboBox" name="hwDecodeComboBox">
-              <item><property name="text"><string>Auto</string></property></item>
-              <item><property name="text"><string>NVIDIA (NVDEC)</string></property></item>
-              <item><property name="text"><string>Intel (QSV)</string></property></item>
-              <item><property name="text"><string>AMD (VAAPI)</string></property></item>
-              <item><property name="text"><string>CPU Only</string></property></item>
-            </widget></item>
-           </layout>
-          </item>
           <item><widget class="QPushButton" name="selectButton"      ><property name="text"><string>Select</string></property></widget></item>
           <item><widget class="QPushButton" name="sortButton"        ><property name="text"><string>Sort</string></property></widget></item>
           <item><widget class="QPushButton" name="sortGroupsButton"  ><property name="text"><string>Sort Groups</string></property></widget></item>
@@ -250,42 +238,6 @@
           <property name="sizeType"><enum>QSizePolicy::Expanding</enum></property>
          </spacer>
         </item>
-       </layout>
-      </widget>
-
-      <!-- HARDWARE ACCEL tab -->
-      <widget class="QWidget" name="hardwareAccelTab">
-       <attribute name="title"><string>Hardware Accel</string></attribute>
-       <layout class="QVBoxLayout" name="hardwareAccelLayout">
-    
-        <!-- control buttons between the tables -->
-        <item>
-         <layout class="QHBoxLayout">
-          <item><widget class="QPushButton" name="addVideoButton"     ><property name="text"><string>Add Video…</string></property></widget></item>
-          <item><spacer name="hardwareAccelSpacer2"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
-          <item><widget class="QLabel"       name="statusLabel" ><property name="text"><string>Idle</string></property></widget></item>
-          <item><widget class="QProgressBar" name="progressBar" ><property name="textVisible"><bool>false</bool></property></widget></item>
-          <item><spacer name="hardwareAccelSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
-          <item><widget class="QPushButton"  name="runButton"   ><property name="text"><string>Run Test</string></property></widget></item>
-         </layout>
-        </item>
-
-        <item>
-         <widget class="QLabel" name="hardwareFilterLabel">
-          <property name="text"><string>Hardware Acceleration Filter</string></property>
-          <property name="styleSheet"><string>font-weight: bold; padding: 4px;</string></property>
-         </widget>
-        </item>
-
-        <!-- Custom‑tests (video list) table -->
-        <item>
-            <widget class="QTableView" name="customTestsView">
-                <property name="sortingEnabled">
-                    <bool>true</bool>
-                </property>
-            </widget>
-        </item>
-    
        </layout>
       </widget>
 

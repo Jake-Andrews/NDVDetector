@@ -11,14 +11,10 @@ extern "C" {
 #include <libavutil/avutil.h>
 #include <libavutil/buffer.h>
 #include <libavutil/error.h>
-#include <libavutil/hwcontext.h>
-#include <libavutil/hwcontext_drm.h>
-#include <libavutil/hwcontext_vaapi.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/pixfmt.h>
-#include <va/va.h>
-#include <va/va_drmcommon.h>
+#include <libswscale/swscale.h>
 }
 
 #include <algorithm>
@@ -32,13 +28,11 @@ extern "C" {
 #include <mutex>
 #include <optional>
 #include <sstream>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
 // saves frames to fs for debugging
 static constexpr double KSAMPLEPERIOD = 1.0; // seconds → 1 FPS
-static constexpr int KMAXHWERRORS = 30;      // non‑fatal errors before abandoning HW
 static constexpr uint64_t ALLBLACK = 0x0000000000000000ULL;
 static constexpr uint64_t ALLONECOLOUR = 0x8000000000000000ULL;
 static constexpr int KOUTH = 32;
@@ -97,98 +91,40 @@ inline void report_progress(std::function<void(int)> const& cb, int pct)
     if (cb)
         cb(pct);
 }
-
-inline std::string glErrorString(GLenum err)
-{
-    switch (err) {
-    case GL_NO_ERROR:
-        return "GL_NO_ERROR";
-    case GL_INVALID_ENUM:
-        return "GL_INVALID_ENUM";
-    case GL_INVALID_VALUE:
-        return "GL_INVALID_VALUE";
-    case GL_INVALID_OPERATION:
-        return "GL_INVALID_OPERATION";
-    case GL_STACK_OVERFLOW:
-        return "GL_STACK_OVERFLOW";
-    case GL_STACK_UNDERFLOW:
-        return "GL_STACK_UNDERFLOW";
-    case GL_OUT_OF_MEMORY:
-        return "GL_OUT_OF_MEMORY";
-    case GL_INVALID_FRAMEBUFFER_OPERATION:
-        return "GL_INVALID_FRAMEBUFFER_OPERATION";
-    default: {
-        std::stringstream ss;
-        ss << "Unknown GL error 0x" << std::hex << err;
-        return ss.str();
-    }
-    }
-}
 } // namespace util
-
-namespace gl {
-class ThreadLocalContext {
-public:
-    static ThreadLocalContext& current()
-    {
-        thread_local ThreadLocalContext ctx;
-        return ctx;
-    }
-
-    bool ensure_current()
-    {
-        try {
-            if (!m_ctx) {
-                spdlog::debug("[GL] Creating new thread-local GLContext");
-                m_ctx.emplace();
-            } else {
-                spdlog::debug("[GL] Making existing thread-local GLContext current");
-                m_ctx->makeCurrent();
-            }
-            return true;
-        } catch (std::exception const& e) {
-            spdlog::error("[GL] Exception during ensure_current: {}", e.what());
-            return false;
-        }
-    }
-
-    // Provides access to the underlying GLContext API (display, context handles)
-    ::GLContext& api()
-    {
-        if (!m_ctx) {
-            // This should not happen if ensure_current() was called and succeeded
-            throw std::runtime_error("[GL] Attempted to access GLContext API before ensuring context");
-        }
-        return *m_ctx;
-    }
-
-private:
-    ThreadLocalContext() = default;
-    ~ThreadLocalContext() = default;
-    ThreadLocalContext(ThreadLocalContext const&) = delete;
-    ThreadLocalContext& operator=(ThreadLocalContext const&) = delete;
-
-    std::optional<::GLContext> m_ctx;
-};
-} // namespace gl
 
 using util::sec_to_pts;
 
-static inline bool sample_hit(int64_t pts, int64_t& next_pts, int64_t step)
+// CPU-only luma extractor
+static bool extract_luma_32x32_cpu(AVFrame const* src, uint8_t* dst)
 {
-    if (pts == AV_NOPTS_VALUE) {
-        next_pts += step;
-        return true;
+    static SwsContext* sws = nullptr;
+    static int lastW = 0, lastH = 0, lastFmt = AV_PIX_FMT_NONE;
+
+    if (!sws || src->width != lastW || src->height != lastH || src->format != lastFmt) {
+        if (sws)
+            sws_freeContext(sws);
+        sws = sws_getContext(src->width, src->height,
+            static_cast<AVPixelFormat>(src->format),
+            32, 32, AV_PIX_FMT_GRAY8,
+            SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+        if (!sws) {
+            spdlog::error("[sw] sws_getContext failed");
+            return false;
+        }
+        lastW = src->width;
+        lastH = src->height;
+        lastFmt = src->format;
     }
-    if (pts >= next_pts) {
-        next_pts += step;
-        return true;
-    }
-    return false;
+    uint8_t* dstData[1] = { dst };
+    int dstLines[1] = { 32 };
+    return sws_scale(sws, src->data, src->linesize, 0, src->height,
+               dstData, dstLines)
+        > 0;
 }
 
 // CPU/Software decoding path
-std::vector<uint64_t> decode_and_hash_sw(
+std::vector<uint64_t> decode_and_hash(
     std::string const& file,
     double skip_pct,
     int duration_s,
@@ -196,13 +132,9 @@ std::vector<uint64_t> decode_and_hash_sw(
     std::function<void(int)> const& on_progress)
 {
     using namespace util;
+    static std::once_flag ffOnce;
+    std::call_once(ffOnce, [] { av_log_set_level(AV_LOG_WARNING); });
 
-    // Ensure we have a GL context for luma extraction
-    auto& tl = gl::ThreadLocalContext::current();
-    if (!tl.ensure_current()) {
-        spdlog::error("[sw] Failed to create/activate GL context");
-        return {};
-    }
     std::array<uint8_t, KOUTW * KOUTH> lumaTile;
 
     spdlog::info("[sw] decoding '{}' (skip={}%, duration={} s, limit={})",
@@ -366,7 +298,7 @@ std::vector<uint64_t> decode_and_hash_sw(
                 if (frame_pts == AV_NOPTS_VALUE || frame_pts >= next_pts) {
                     // got a frame → process
                     ++frames_seen;
-                    if (lumaext::extract_luma_32x32(tl.api(), frm.get(), lumaTile.data())) {
+                    if (extract_luma_32x32_cpu(frm.get(), lumaTile.data())) {
                         if constexpr (KDUMPFRAMES) {
                             std::ostringstream ss;
                             ss << "sw_" << std::setw(6) << std::setfill('0') << hashes.size() << ".pgm";
@@ -384,8 +316,7 @@ std::vector<uint64_t> decode_and_hash_sw(
                             }
                         }
                     } else {
-                        spdlog::warn("[sw] luma extractor failed ({})",
-                            lumaext::to_string(lumaext::last_error()));
+                        spdlog::warn("[sw] luma extractor failed");
                     }
 
                     next_pts += step_pts; // advance to next second
@@ -422,7 +353,7 @@ decode_done:
 
             if (frame_pts == AV_NOPTS_VALUE || frame_pts >= next_pts) {
                 ++frames_seen;
-                if (lumaext::extract_luma_32x32(tl.api(), frm.get(), lumaTile.data())) {
+                if (extract_luma_32x32_cpu(frm.get(), lumaTile.data())) {
                     if constexpr (KDUMPFRAMES) {
                         std::ostringstream ss;
                         ss << "sw_" << std::setw(6) << std::setfill('0') << hashes.size() << ".pgm";
@@ -432,8 +363,7 @@ decode_done:
                     if (auto h = compute_phash_from_preprocessed(lumaTile.data()))
                         hashes.push_back(*h);
                 } else {
-                    spdlog::warn("[sw] luma extractor failed ({})",
-                        lumaext::to_string(lumaext::last_error()));
+                    spdlog::warn("[sw] luma extractor failed");
                 }
 
                 next_pts += step_pts; // advance to next second
@@ -447,65 +377,4 @@ decode_done:
 
     spdlog::info("[sw] finished: {} frames seen, {} hashes", frames_seen, hashes.size());
     return hashes;
-}
-
-// Public entry point
-std::vector<uint64_t> extract_phashes_from_video(
-    std::string const& file,
-    double skip_pct,
-    int duration_s,
-    int max_frames,
-    bool allow_hw,
-    std::function<void(int)> const& on_progress)
-{
-    static std::once_flag ffmpeg_log_flag;
-    std::call_once(ffmpeg_log_flag, [] {
-        av_log_set_level(AV_LOG_WARNING);
-        spdlog::info("Set FFmpeg internal log level to WARNING.");
-    });
-
-    std::vector<uint64_t> hashes_result;
-    bool hw_attempted = false;
-
-    if (allow_hw) {
-        spdlog::info("Hardware acceleration allowed, attempting HW path...");
-        hw_attempted = true;
-        try {
-            hashes_result = decode_and_hash_hw_gl(file, skip_pct, duration_s, max_frames, on_progress);
-        } catch (std::exception const& e) {
-            spdlog::error("[extract] Exception caught during HW decode attempt: {}", e.what());
-            hashes_result.clear(); // Ensure fallback happens
-        } catch (...) {
-            spdlog::error("[extract] Unknown exception caught during HW decode attempt.");
-            hashes_result.clear(); // Ensure fallback happens
-        }
-    } else {
-        spdlog::info("Hardware acceleration disabled by caller.");
-    }
-
-    // Fallback to SW if HW was disabled, not attempted, failed, or produced no hashes
-    if (hashes_result.empty()) {
-        if (hw_attempted) {
-            spdlog::warn("[extract] HW path failed or produced no hashes → SW fallback initiated.");
-        } else if (!allow_hw) {
-            spdlog::info("[extract] HW path disabled → SW path initiated.");
-        } else {
-            // Should not happen if allow_hw was true, implies HW path wasn't even entered
-            spdlog::warn("[extract] HW path not attempted/skipped? → SW fallback initiated.");
-        }
-        try {
-            hashes_result = decode_and_hash_sw(file, skip_pct, duration_s, max_frames, on_progress);
-        } catch (std::exception const& e) {
-            spdlog::error("[extract] Exception caught during SW decode attempt: {}", e.what());
-            hashes_result.clear();
-        } catch (...) {
-            spdlog::error("[extract] Unknown exception caught during SW decode attempt.");
-            hashes_result.clear();
-        }
-    } else {
-        spdlog::info("[extract] HW path succeeded.");
-    }
-
-    spdlog::info("[extract] Finished pHash extraction for '{}'. Found {} hashes.", file, hashes_result.size());
-    return hashes_result;
 }

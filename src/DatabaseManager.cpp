@@ -3,15 +3,14 @@
 #include "SearchSettings.h"
 #include "VideoInfo.h"
 
-#include "CodecTestWorker.h"
-#include "FFProbeExtractor.h"
 #include <QDir>
 #include <QFileInfo>
 
-#include <memory>
-#include <optional>
 #include <spdlog/spdlog.h>
 #include <sqlite3.h>
+
+#include <memory>
+#include <optional>
 #include <stdexcept>
 
 namespace {
@@ -515,8 +514,6 @@ void DatabaseManager::initDatabase()
     execStatement(createDupGroupMapTable);
     execStatement(createSettingsTableSQL);
     execStatement(createHardwareFilterTableSQL);
-
-    populateHardwareFiltersIfEmpty();
 }
 
 void DatabaseManager::execStatement(std::string const& sql)
@@ -528,45 +525,6 @@ void DatabaseManager::execStatement(std::string const& sql)
         sqlite3_free(errMsg);
         spdlog::error("SQLite exec failed: {}", msg);
         throw std::runtime_error("SQLite exec failed: " + msg);
-    }
-}
-
-void DatabaseManager::populateHardwareFiltersIfEmpty()
-{
-    // 1. Already filled? -----------------------------------------------------
-    static constexpr char const* kCount = "SELECT COUNT(*) FROM hardware_filter;";
-    {
-        auto stmt = prepareStatement(m_db, kCount);
-        if (sqlite3_step(stmt.get()) == SQLITE_ROW && sqlite3_column_int(stmt.get(), 0) > 0)
-            return;
-    }
-
-    // 2. Scan default directory ---------------------------------------------
-    QDir dir(QDir::homePath() + "/Documents/NDVDetector/test_videos/");
-    for (QString const& f : dir.entryList(QDir::Files | QDir::NoDotAndDotDot)) {
-        QString const full = dir.filePath(f);
-
-        QString codec = "?", pixFmt = "?", profile = "?", level = "?";
-        if (auto info = probe_video_codec_info(full); info) {
-            auto [c, pf, pr, lvl] = *info;
-            codec = c;
-            pixFmt = pf;
-            profile = pr;
-            level = QString::number(lvl);
-        }
-
-        static constexpr auto sql = R"(
-            INSERT OR IGNORE INTO hardware_filter
-                (path, codec, pix_fmt, profile, level)
-            VALUES (?,?,?,?,?);
-        )";
-        auto stmt = prepareStatement(m_db, sql);
-        sqlite3_bind_text(stmt.get(), 1, full.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt.get(), 2, codec.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt.get(), 3, pixFmt.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt.get(), 4, profile.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt.get(), 5, level.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-        checkRc(sqlite3_step(stmt.get()), m_db, "insert hardware_filter");
     }
 }
 
@@ -617,61 +575,4 @@ void DatabaseManager::saveSettings(SearchSettings const& s)
         m_db, "bind settings json");
 
     checkRc(sqlite3_step(stmt.get()), m_db, "save settings");
-}
-
-// Return every row ordered by id asc
-std::vector<TestItem> DatabaseManager::loadHardwareFilters() const
-{
-    static constexpr auto sql = R"(
-        SELECT path, codec, pix_fmt, profile, level, hw_ok, sw_ok
-        FROM hardware_filter ORDER BY id ASC;
-    )";
-    std::vector<TestItem> out;
-    auto stmt = prepareStatement(m_db, sql);
-    while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
-        TestItem t;
-        t.path = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 0));
-        t.codec = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 1));
-        t.pixFmt = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 2));
-        t.profile = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 3));
-        t.level = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 4));
-        t.hwOk = sqlite3_column_int(stmt.get(), 5);
-        t.swOk = sqlite3_column_int(stmt.get(), 6);
-        out.push_back(std::move(t));
-    }
-    return out;
-}
-
-void DatabaseManager::upsertHardwareFilter(TestItem const& t)
-{
-    static constexpr auto sql = R"(
-        INSERT INTO hardware_filter (path, codec, pix_fmt, profile, level, hw_ok, sw_ok)
-        VALUES (?,?,?,?,?,?,?)
-        ON CONFLICT(path) DO UPDATE SET
-            codec   = excluded.codec,
-            pix_fmt = excluded.pix_fmt,
-            profile = excluded.profile,
-            level   = excluded.level,
-            hw_ok   = excluded.hw_ok,
-            sw_ok   = excluded.sw_ok;
-    )";
-    auto stmt = prepareStatement(m_db, sql);
-    sqlite3_bind_text(stmt.get(), 1, t.path.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt.get(), 2, t.codec.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt.get(), 3, t.pixFmt.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt.get(), 4, t.profile.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt.get(), 5, t.level.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(stmt.get(), 6, t.hwOk);
-    sqlite3_bind_int(stmt.get(), 7, t.swOk);
-    checkRc(sqlite3_step(stmt.get()), m_db, "upsert hardware_filter");
-}
-
-void DatabaseManager::updateHardwareFilterResult(QString const& path, bool hwOk, bool swOk)
-{
-    static constexpr auto sql = "UPDATE hardware_filter SET hw_ok = ?, sw_ok = ? WHERE path = ?;";
-    auto stmt = prepareStatement(m_db, sql);
-    sqlite3_bind_int(stmt.get(), 1, hwOk);
-    sqlite3_bind_int(stmt.get(), 2, swOk);
-    sqlite3_bind_text(stmt.get(), 3, path.toUtf8().constData(), -1, SQLITE_TRANSIENT);
-    checkRc(sqlite3_step(stmt.get()), m_db, "update hardware_filter result");
 }

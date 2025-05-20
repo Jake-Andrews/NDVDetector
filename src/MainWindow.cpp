@@ -1,8 +1,6 @@
 // MainWindow.cpp
 #include "MainWindow.h"
 
-#include "FFProbeExtractor.h"
-#include "GPUVendor.h"
 #include "GroupRowDelegate.h"
 #include "RegexTesterDialog.h"
 #include "VideoModel.h"
@@ -48,49 +46,6 @@ MainWindow::MainWindow(DatabaseManager* db, QWidget* parent)
     view->setSelectionMode(QAbstractItemView::SingleSelection);
     view->setIconSize(QSize(128, 128));
     view->setFocusPolicy(Qt::StrongFocus);
-
-    // -- hardware-accel test view setup --
-    m_testModel = std::make_unique<CustomTestModel>(m_db, this);
-
-    auto* testView = ui->customTestsView;  //
-    testView->setModel(m_testModel.get()); // default delegate is OK
-    testView->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-    testView->verticalHeader()->setDefaultSectionSize(24);
-    testView->setShowGrid(false);
-    testView->setSelectionBehavior(QAbstractItemView::SelectRows);
-    testView->setSelectionMode(QAbstractItemView::SingleSelection);
-    testView->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
-
-    m_codecWorker = new CodecTestWorker;
-    m_codecWorker->moveToThread(&m_codecThread);
-
-    connect(&m_codecThread, &QThread::finished,
-        m_codecWorker, &QObject::deleteLater);
-
-    connect(m_codecWorker, &CodecTestWorker::progress,
-        this, [this](int d, int t) {
-            ui->progressBar->setValue(t ? 100 * d / t : 0);
-        });
-
-    connect(m_codecWorker, &CodecTestWorker::result, this,
-        [this](TestItem const& it, bool hw, bool sw) {
-            m_testModel->updateResult(it.path, hw, sw);
-            ui->statusLabel->setText(
-                QFileInfo(it.path).fileName() + " —  HW " + (hw ? "✅" : "❌") + "  SW " + (sw ? "✅" : "❌"));
-        });
-
-    connect(m_codecWorker, &CodecTestWorker::finished,
-        this, [this] {
-            ui->statusLabel->setText(tr("Finished"));
-            ui->runButton->setEnabled(true);
-        });
-
-    connect(m_codecWorker, &CodecTestWorker::finished,
-        &m_codecThread, &QThread::quit);
-
-    // ---------- Button hooks ------------------------------------------------
-    connect(ui->addVideoButton, &QPushButton::clicked, this, &MainWindow::onAddVideoClicked);
-    connect(ui->runButton, &QPushButton::clicked, this, &MainWindow::onRunTestsClicked);
 
     // ---------- Misc UI behaviour -------------------------------------------
     connect(view, &QTableView::clicked, this, [this, view](QModelIndex const& ix) {
@@ -323,47 +278,6 @@ void MainWindow::onNewDbClicked()
 }
 void MainWindow::setCurrentDatabase(QString const& path) { ui->currentDbLineEdit->setText(path); }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Codec‑tests slots
-// ─────────────────────────────────────────────────────────────────────────────
-void MainWindow::onAddVideoClicked()
-{
-    QStringList files = QFileDialog::getOpenFileNames(
-        this, tr("Choose Video(s)"), {}, {}, nullptr,
-        QFileDialog::DontUseNativeDialog);
-    for (QString const& f : files)
-        addTestFile(f);
-}
-
-void MainWindow::onRunTestsClicked()
-{
-    ui->runButton->setEnabled(false);
-    ui->statusLabel->setText(tr("Running…"));
-    ui->progressBar->setValue(0);
-
-    startCodecWorker(buildTestList());
-}
-
-void MainWindow::startCodecWorker(QVector<TestItem> const& tests)
-{
-    if (tests.isEmpty()) {
-        ui->statusLabel->setText(tr("Nothing to test"));
-        ui->runButton->setEnabled(true);
-        return;
-    }
-
-    m_codecWorker->setTests(tests);
-    if (!m_codecThread.isRunning())
-        m_codecThread.start();
-
-    QMetaObject::invokeMethod(m_codecWorker, "run", Qt::QueuedConnection);
-}
-
-QVector<TestItem> MainWindow::buildTestList() const
-{
-    return m_testModel->items();
-}
-
 SearchSettings MainWindow::collectSearchSettings() const
 {
     SearchSettings s;
@@ -417,39 +331,6 @@ SearchSettings MainWindow::collectSearchSettings() const
     s.directories = getDirSettings();
     compileAllRegexes(s);
 
-    /* HW backend selection -------------------------------- */
-    auto hwUsable = [](AVHWDeviceType t) {
-        if (t == AV_HWDEVICE_TYPE_DRM)
-            return false; // unsupported here
-        AVBufferRef* tmp = nullptr;
-        bool ok = av_hwdevice_ctx_create(&tmp, t, nullptr, nullptr, 0) >= 0;
-        av_buffer_unref(&tmp);
-        return ok;
-    };
-    auto choose = [&](GPUVendor v) {
-        for (auto [_, dev] : make_priority_list(v))
-            if (dev != AV_HWDEVICE_TYPE_NONE && hwUsable(dev))
-                return dev;
-        return AV_HWDEVICE_TYPE_NONE;
-    };
-
-    switch (ui->hwDecodeComboBox->currentIndex()) {
-    case 1:
-        s.hwBackend = choose(GPUVendor::Nvidia);
-        break;
-    case 2:
-        s.hwBackend = choose(GPUVendor::Intel);
-        break;
-    case 3:
-        s.hwBackend = choose(GPUVendor::AMD);
-        break;
-    case 4:
-        s.hwBackend = AV_HWDEVICE_TYPE_NONE;
-        break;
-    default:
-        s.hwBackend = choose(detect_gpu());
-        break;
-    }
     return s;
 }
 
@@ -483,16 +364,4 @@ void MainWindow::onValidatePatternsClicked()
                               })));
         QMessageBox::critical(this, tr("Pattern errors"), msg);
     }
-}
-
-void MainWindow::addTestFile(QString const& path)
-{
-    auto info = probe_video_codec_info(path);
-    if (!info)
-        return;
-
-    auto [codec, pixFmt, profile, level] = *info;
-    TestItem item { path, codec, pixFmt, profile, QString::number(level) };
-    m_tests.push_back(item);              // keep the in‑memory list
-    m_testModel->append(std::move(item)); // paint a new row
 }

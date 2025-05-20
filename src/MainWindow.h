@@ -6,9 +6,8 @@
 #include <memory>
 #include <vector>
 
-#include "CustomTestModel.h"
+#include "DatabaseManager.h"
 #include "SearchSettings.h"
-#include "CodecTestWorker.h"
 #include "VideoInfo.h"
 
 QT_BEGIN_NAMESPACE
@@ -68,17 +67,9 @@ private slots:
     void onNewDbClicked();
     void onValidatePatternsClicked();
 
-    void onAddVideoClicked();          // “Add Video…”
-    void onRunTestsClicked();          // “Run Tests”
-
 private:
     bool           eventFilter(QObject*, QEvent*) override;
     SearchSettings collectSearchSettings() const;
-
-    // helpers
-    void           addTestFile(QString const& path);
-    QVector<TestItem> buildTestList() const;
-    void           startCodecWorker(QVector<TestItem> const& tests);
 
     // data
     Ui::MainWindow*             ui   = nullptr;
@@ -86,10 +77,6 @@ private:
 
     DatabaseManager*            m_db = nullptr;          // already existing elsewhere in app
 
-    CodecTestWorker*            m_codecWorker   = nullptr;
     QThread                     m_codecThread;
-
-    std::unique_ptr<CustomTestModel> m_testModel;   
-    QVector<TestItem>           m_tests;        
 };
 
