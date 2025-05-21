@@ -3,7 +3,9 @@
 #include <QDebug>
 #include <QFont>
 #include <QIcon>
+#include <QPainter>
 #include <QPixmap>
+#include <QTableView>
 #include <algorithm>
 #include <climits>
 #include <numeric>
@@ -132,16 +134,46 @@ QVariant VideoModel::data(QModelIndex const& index, int role) const
     } else if (role == Qt::DecorationRole && index.column() == Col_Screenshot) {
         auto const& vid = row.video.value();
 
-        if (!vid.thumbnail_path.empty()) {
-            QString thumbPath = QString::fromStdString(vid.thumbnail_path);
-            QPixmap pix(thumbPath);
-            if (!pix.isNull()) {
-                QPixmap scaled = pix.scaled(128, 128, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-                return QIcon(scaled);
-            }
+        if (vid.thumbnail_path.empty())
+            return QIcon("./placeholder.png");
+
+        auto* view = qobject_cast<QTableView const*>(parent());
+        int kCell = view ? view->iconSize().height() : 128;
+        int nThumbs = std::min<std::size_t>(vid.thumbnail_path.size(),
+            static_cast<size_t>(m_thumbnailsPerVideo));
+
+        // helper – load & scale a pixmap so it fits into (maxW × maxH)
+        auto loadScaled = [](QString const& fp, int maxW, int maxH) {
+            QPixmap p(fp);
+            if (p.isNull())
+                return p;
+            return p.scaled(maxW, maxH, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        };
+
+        // --- single image → as before ---
+        if (nThumbs == 1) {
+            QPixmap p = loadScaled(QString::fromStdString(vid.thumbnail_path.front()), kCell, kCell);
+            return p.isNull() ? QIcon("./placeholder.png") : QIcon(p);
         }
-        // fallback
-        return QIcon("./placeholder.png");
+
+        // --- 2-4 images → side-by-side in one row with gap ---
+        constexpr int gap = 4; // px between thumbs
+        int canvasW = nThumbs * kCell + (nThumbs - 1) * gap;
+        QPixmap canvas(canvasW, kCell);
+        canvas.fill(Qt::transparent);
+        QPainter painter(&canvas);
+
+        int x = 0;
+        for (int i = 0; i < nThumbs; ++i) {
+            QPixmap thumb = loadScaled(
+                QString::fromStdString(vid.thumbnail_path[i]), kCell, kCell);
+            if (!thumb.isNull())
+                painter.drawPixmap(x, (kCell - thumb.height()) / 2, thumb);
+
+            x += kCell + gap;
+        }
+        painter.end();
+        return QIcon(canvas);
     }
 
     else if (role == Qt::TextAlignmentRole && index.column() == Col_Screenshot) {
@@ -552,4 +584,19 @@ void VideoModel::updateVideosBulk(std::vector<VideoInfo> const& vids)
 {
     for (auto const& v : vids)
         updateVideoInfo(v);
+}
+
+void VideoModel::setThumbnailsPerVideo(int n)
+{
+    n = std::clamp(n, 1, 4);
+    if (m_thumbnailsPerVideo == n)
+        return;
+    m_thumbnailsPerVideo = n;
+
+    // --- repaint all thumbnail cells ---
+    for (int r = 0; r < rowCount(); ++r)
+        if (m_rows[r].type == RowType::Video)
+            emit dataChanged(index(r, Col_Screenshot),
+                index(r, Col_Screenshot),
+                { Qt::DecorationRole });
 }

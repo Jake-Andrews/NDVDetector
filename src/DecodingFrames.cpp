@@ -157,7 +157,7 @@ std::vector<uint64_t> decode_and_hash(
     spdlog::info("[sw] decoding '{}' (skip={}%, duration={} s, limit={})",
         file, skip_pct * 100, duration_s, max_frames);
 
-    /* ───────────────────────────── demuxer open ───────────────────────── */
+    // --- demuxer open ---
     FmtPtr fmt;
     {
         AVDictionary* o = nullptr;
@@ -189,7 +189,7 @@ std::vector<uint64_t> decode_and_hash(
     int64_t const step_pts = util::sec_to_pts(KSAMPLEPERIOD, st->time_base);
     int64_t next_pts = 0; // first target (may be overwritten after seek)
 
-    /* ─────────────── determine/override duration (caller may give 0) ─── */
+    // --- determine/override duration (caller may give 0) ---
     if (st->duration != AV_NOPTS_VALUE) {
         duration_s = static_cast<int>(st->duration * av_q2d(st->time_base));
         spdlog::debug("[sw] Determined duration from stream: {} s", duration_s);
@@ -201,7 +201,7 @@ std::vector<uint64_t> decode_and_hash(
         spdlog::warn("[sw] Could not determine video duration.");
     }
 
-    /* ───────────────────────────── decoder open ───────────────────────── */
+    // --- decoder open ---
     AVCodec const* dec = avcodec_find_decoder(st->codecpar->codec_id);
     if (!dec) {
         spdlog::warn("[ffmpeg-sw] unsupported codec ID {}", static_cast<int>(st->codecpar->codec_id));
@@ -216,9 +216,7 @@ std::vector<uint64_t> decode_and_hash(
         return {};
     }
 
-    /* multithreading BEFORE avcodec_open2() */
-    // files normally cary only one slice per frame, so FF_THREAD_SLICE provides
-    // no parallelism
+    // files normally cary only one slice per frame, so FF_THREAD_SLICE provides no parallelism
     codec_ctx->thread_type = FF_THREAD_FRAME;
     // Decode only reference frames, skip loop-filter & idct already set above
     codec_ctx->skip_frame = AVDISCARD_NONREF;
@@ -237,11 +235,11 @@ std::vector<uint64_t> decode_and_hash(
         return {};
     }
 
-    /* ───────────────────── pre‑allocate frames/packets ────────────────── */
+    // --- pre‑allocate frames/packets ---
     FrmPtr frm { av_frame_alloc() };
     PktPtr pkt { av_packet_alloc() };
 
-    /* ───────────────────────────── seeking logic ─────────────────────── */
+    // --- seeking logic ---
     double pct = std::clamp(skip_pct, 0.0, 0.20);
     qint64 file_sz = QFileInfo(QString::fromStdString(file)).size();
     if ((duration_s > 0 && duration_s < 20) || file_sz < 5 * 1024 * 1024) {
@@ -265,7 +263,7 @@ std::vector<uint64_t> decode_and_hash(
         spdlog::debug("[sw] Initial skip percentage is 0 or duration unknown, skipping seeking.");
     }
 
-    /* ───────────────────── main decode / hash loop ───────────────────── */
+    // --- main decode / hash loop ---
     std::vector<uint64_t> hashes;
     hashes.reserve(est);
 
@@ -285,7 +283,7 @@ std::vector<uint64_t> decode_and_hash(
             continue;
         }
 
-        /* send the packet — retry once on EAGAIN */
+        // --- send the packet — retry once on EAGAIN ---
         bool packet_retained = true;
         while (packet_retained) {
             int sret = avcodec_send_packet(codec_ctx.get(), pkt.get());
@@ -305,7 +303,7 @@ std::vector<uint64_t> decode_and_hash(
                 break;
             }
 
-            /* drain frames */
+            // --- drain frames ---
             while (true) {
                 int rret = avcodec_receive_frame(codec_ctx.get(), frm.get());
                 if (rret == AVERROR(EAGAIN))
@@ -362,7 +360,7 @@ std::vector<uint64_t> decode_and_hash(
     }
 
 decode_done:
-    /* ───────────────────────── flush remaining ───────────────────────── */
+    // --- flush remaining ---
     if (!fatal_error && !stopped) {
         avcodec_send_packet(codec_ctx.get(), nullptr);
         while (true) {

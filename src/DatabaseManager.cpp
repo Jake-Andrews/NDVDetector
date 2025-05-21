@@ -10,6 +10,7 @@
 #include <sqlite3.h>
 
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <stdexcept>
 
@@ -97,7 +98,12 @@ std::optional<int> DatabaseManager::insertVideo(VideoInfo& video)
         checkRc(sqlite3_bind_int64(stmt.get(), 16, static_cast<sqlite3_int64>(video.device)), m_db, "bind device");
         checkRc(sqlite3_bind_int(stmt.get(), 17, video.sample_rate_avg), m_db, "bind sample_rate_avg");
         checkRc(sqlite3_bind_double(stmt.get(), 18, video.avg_frame_rate), m_db, "bind avg_frame_rate");
-        checkRc(sqlite3_bind_text(stmt.get(), 19, video.thumbnail_path.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind thumbnail_path");
+        {
+            std::string thumbsJson = nlohmann::json(video.thumbnail_path).dump();
+            checkRc(sqlite3_bind_text(stmt.get(), 19, thumbsJson.c_str(),
+                        -1, SQLITE_TRANSIENT),
+                m_db, "bind thumbnail_path");
+        }
         checkRc(sqlite3_step(stmt.get()), m_db, "execute insertVideo");
 
         return static_cast<int>(sqlite3_last_insert_rowid(m_db));
@@ -173,8 +179,22 @@ std::vector<VideoInfo> DatabaseManager::getAllVideos() const
                 v.device = static_cast<long>(sqlite3_column_int64(stmt.get(), 16));
                 v.sample_rate_avg = sqlite3_column_int(stmt.get(), 17);
                 v.avg_frame_rate = sqlite3_column_double(stmt.get(), 18);
-                char const* t = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 19));
-                v.thumbnail_path = t ? t : "";
+                if (auto* t = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 19)); t) {
+                    try {
+                        auto j = nlohmann::json::parse(t);
+                        if (j.is_array())
+                            v.thumbnail_path = j.get<std::vector<std::string>>();
+                        else if (j.is_string()) {
+                            std::string s = j.get<std::string>();
+                            if (!s.empty())
+                                v.thumbnail_path = { std::move(s) };
+                        }
+                    } catch (...) {
+                        std::string s(t);
+                        if (!s.empty())
+                            v.thumbnail_path = { std::move(s) };
+                    }
+                }
                 results.push_back(std::move(v));
             } else if (rc == SQLITE_DONE) {
                 break;
@@ -334,7 +354,12 @@ void DatabaseManager::updateVideoInfo(VideoInfo const& v)
         checkRc(sqlite3_bind_int64(stmt.get(), 16, static_cast<sqlite3_int64>(v.device)), m_db, "bind device");
         checkRc(sqlite3_bind_int(stmt.get(), 17, v.sample_rate_avg), m_db, "bind sample_rate_avg");
         checkRc(sqlite3_bind_double(stmt.get(), 18, v.avg_frame_rate), m_db, "bind avg_frame_rate");
-        checkRc(sqlite3_bind_text(stmt.get(), 19, v.thumbnail_path.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind thumbnail_path");
+        {
+            std::string thumbsJson = nlohmann::json(v.thumbnail_path).dump();
+            checkRc(sqlite3_bind_text(stmt.get(), 19, thumbsJson.c_str(),
+                        -1, SQLITE_TRANSIENT),
+                m_db, "bind thumbnail_path");
+        }
         checkRc(sqlite3_bind_int(stmt.get(), 20, v.id), m_db, "bind id");
         checkRc(sqlite3_step(stmt.get()), m_db, "execute updateVideoInfo");
     } catch (std::exception const& ex) {

@@ -104,13 +104,21 @@ void SearchWorker::doExtractionAndDetection(std::vector<VideoInfo>& videos)
         } else {
             // Try to extract thumbnail
             try {
-                if (auto opt = extract_color_thumbnail(v.path))
-                    v.thumbnail_path = opt->toStdString();
-                else
-                    v.thumbnail_path = "./sneed.png"; // fallback logo
+                v.thumbnail_path.clear();
+
+                if (auto opt = extract_color_thumbnails(v, m_cfg.thumbnailsPerVideo)) {
+                    v.thumbnail_path.reserve(opt->size());
+                    for (auto const& qpath : *opt)
+                        v.thumbnail_path.push_back(qpath.toStdString());
+                }
+
+                // Fallback when extraction failed or returned nothing
+                if (v.thumbnail_path.empty())
+                    v.thumbnail_path.emplace_back("./sneed.png");
             } catch (std::exception const& ex) {
                 spdlog::error("[thumbnail] Exception during thumbnail extraction: {}", ex.what());
-                v.thumbnail_path = "./sneed.png"; // fallback logo
+                v.thumbnail_path.clear();
+                v.thumbnail_path.emplace_back("./sneed.png"); // fallback logo
             }
 
             // Try to insert into database

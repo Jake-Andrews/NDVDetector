@@ -205,6 +205,20 @@
              <property name="text"><string>Sandbox to test patterns…</string></property>
             </widget>
            </item>
+           <item row="11" column="0">
+            <widget class="QLabel" name="thumbsLabel">
+              <property name="text">
+                <string>Thumbnails per video (1-4)</string>
+              </property>
+            </widget>
+           </item>
+           <item row="11" column="1">
+            <widget class="QSpinBox" name="thumbnailsSpin">
+              <property name="minimum"><number>1</number></property>
+              <property name="maximum"><number>4</number></property>
+              <property name="value"><number>4</number></property>
+            </widget>
+           </item>
           </layout>
          </widget>
         </item>

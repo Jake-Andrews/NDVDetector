@@ -2,22 +2,21 @@
 #include "UnionFind.h"
 #include "VideoInfo.h"
 #include <hft/hftrie.hpp>
-#include <spdlog/spdlog.h> // logging
+#include <spdlog/spdlog.h>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 /*!
  * \brief findDuplicates
- *        Detects duplicate videos based on pHashes. Replicates the existing logic
- *        for HFTrie insertion, RangeSearch, match count, union-find, etc.
+ *        Detects duplicate videos based on pHashes.
  *
  * \param videos        A list of all VideoInfo from DB.
  * \param hashGroups    Each HashGroup has 'fk_hash_video' + 'hashes' for that video.
  * \param searchRange   The Hamming distance threshold for RangeSearchFast.
- * \param matchThreshold The min # of matching hashes needed to consider a video a duplicate.
+ * \param matchThreshold The minimum number of matching hashes needed to consider a video a duplicate.
  *
- * \return A vector of connected components, each is a vector of VideoInfo duplicates.
+ * \return A vector of vector's each containing VideoInfo duplicates.
  */
 
 namespace {

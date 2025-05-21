@@ -2,5 +2,9 @@
 
 #include <qobject.h>
 #include <string>
+#include <vector>
+#include "VideoInfo.h"          // new
 
-std::optional<QString> extract_color_thumbnail(std::string const& filePath);
+std::optional<std::vector<QString>>
+extract_color_thumbnails(VideoInfo const& info,
+                         int thumbnailsToGenerate);

@@ -25,7 +25,7 @@ struct VideoInfo {
     int sample_rate_avg = 0;
     double avg_frame_rate = 0.0;
 
-    std::string thumbnail_path;
+    std::vector <std::string> thumbnail_path;
 };
 
 struct FractionFloat64 {

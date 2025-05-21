@@ -102,10 +102,9 @@ void HardlinkWorker::process()
                 v->inode = srcInode;
                 v->device = srcDevice;
 
-                // delete thumbnail
-                if (!v->thumbnail_path.empty()) {
-                    std::filesystem::remove(std::filesystem::path(v->thumbnail_path), ec);
-                }
+                // delete thumbnails
+                for (auto const& p : v->thumbnail_path)
+                    std::filesystem::remove(std::filesystem::path(p), ec);
             } else {
                 qWarning() << "Hard‑link failed:" << v->path.c_str()
                            << "->" << source->path.c_str()

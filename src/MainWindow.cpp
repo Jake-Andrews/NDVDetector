@@ -16,6 +16,7 @@
 #include <QMouseEvent>
 #include <QPlainTextEdit>
 #include <QProgressBar>
+#include <QSpinBox>
 #include <QToolButton>
 #include <numeric>
 #include <spdlog/spdlog.h>
@@ -37,15 +38,46 @@ MainWindow::MainWindow(DatabaseManager* db, QWidget* parent)
     // -- video list view setup --
     auto* view = ui->tableView;
     view->setModel(m_model.get());
-    view->setItemDelegate(new GroupRowDelegate(this));
+
+    // delegate with dynamic row-height
+    auto* delegate = new GroupRowDelegate(this);
+    delegate->setThumbnailsPerVideo(ui->thumbnailsSpin->value());
+    view->setItemDelegate(delegate);
+
     view->viewport()->installEventFilter(this);
+
+    // allow user drag-resize of rows
+    view->verticalHeader()->setSectionResizeMode(QHeaderView::Interactive);
+
     view->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    // NEW ─ let the thumbnail column grow / shrink with its pixmap
+    view->horizontalHeader()->setSectionResizeMode(
+        VideoModel::Col_Screenshot, // thumbnail column
+        QHeaderView::ResizeToContents);
     view->verticalHeader()->setDefaultSectionSize(120);
     view->setShowGrid(false);
     view->setSelectionBehavior(QAbstractItemView::SelectRows);
     view->setSelectionMode(QAbstractItemView::SingleSelection);
-    view->setIconSize(QSize(128, 128));
+    constexpr int cell = 128;
+    constexpr int gap = 4;
+    int n = ui->thumbnailsSpin->value();
+    int w = n * cell + (n - 1) * gap;
+    view->setIconSize(QSize(w, cell));
     view->setFocusPolicy(Qt::StrongFocus);
+
+    // keep model + delegate in sync with the spin-box
+    connect(ui->thumbnailsSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+        this, [this, delegate](int n) {
+            m_model->setThumbnailsPerVideo(n);
+            delegate->setThumbnailsPerVideo(n);
+            constexpr int cell = 128;
+            constexpr int gap = 4;
+            int w = n * cell + (n - 1) * gap;
+            ui->tableView->setIconSize(QSize(w, cell));
+            ui->tableView->doItemsLayout();        // recompute geometry
+            ui->tableView->resizeColumnToContents( // NEW
+                VideoModel::Col_Screenshot);
+        });
 
     // ---------- Misc UI behaviour -------------------------------------------
     connect(view, &QTableView::clicked, this, [this, view](QModelIndex const& ix) {
@@ -105,6 +137,8 @@ void MainWindow::setDuplicateVideoGroups(
     std::vector<std::vector<VideoInfo>> const& groups)
 {
     m_model->setGroupedVideos(groups);
+    ui->tableView->resizeColumnToContents( // NEW
+        VideoModel::Col_Screenshot);
 }
 void MainWindow::onDuplicateGroupsUpdated(
     std::vector<std::vector<VideoInfo>> const& groups)
@@ -115,7 +149,9 @@ void MainWindow::onDuplicateGroupsUpdated(
 
 void MainWindow::onSearchClicked()
 {
-    emit searchRequested(collectSearchSettings());
+    SearchSettings s = collectSearchSettings();
+    m_model->setThumbnailsPerVideo(s.thumbnailsPerVideo);
+    emit searchRequested(std::move(s));
 }
 
 void MainWindow::onSelectClicked()
@@ -227,12 +263,7 @@ void MainWindow::onDirectoryListUpdated(QStringList const& dirs)
     }
 }
 
-/*──────────────────────────────────────────────────────────────
- *  open video on double‑click
- *────────────────────────────────────────────────────────────*/
-// ─────────────────────────────────────────────────────────────────────────────
-//  Double‑click to open video
-// ─────────────────────────────────────────────────────────────────────────────
+//  Double‑click opens a video
 void MainWindow::onRowActivated(QModelIndex const& ix)
 {
     if (!ix.isValid())
@@ -284,7 +315,7 @@ SearchSettings MainWindow::collectSearchSettings() const
     s.useGlob = ui->globCheckBox->isChecked();
     s.caseInsensitive = ui->caseCheckBox->isChecked();
 
-    /* extensions ------------------------------------------ */
+    // --- extensions ---
     QString extTxt = ui->extensionsEdit->text().trimmed();
     if (!extTxt.isEmpty()) {
         for (QString e : extTxt.split(',', Qt::SkipEmptyParts)) {
@@ -295,7 +326,7 @@ SearchSettings MainWindow::collectSearchSettings() const
         }
     }
 
-    /* regex / glob filters -------------------------------- */
+    // --- regex / glob filters ---
     auto split = [](QString const& txt) {
         QStringList ls = txt.split('\n', Qt::SkipEmptyParts);
         for (QString& l : ls)
@@ -311,13 +342,13 @@ SearchSettings MainWindow::collectSearchSettings() const
     for (QString const& p : split(ui->excludeDirEdit->toPlainText()))
         s.excludeDirPatterns.push_back(p.toStdString());
 
-    /* size limits ----------------------------------------- */
+    // --- size limits ---
     if (ui->minBytesSpin->value() > 0)
         s.minBytes = static_cast<std::uint64_t>(ui->minBytesSpin->value() * 1024 * 1024);
     if (ui->maxBytesSpin->value() > 0)
         s.maxBytes = static_cast<std::uint64_t>(ui->maxBytesSpin->value() * 1024 * 1024);
 
-    /* directory list & regex compilation ------------------ */
+    // --- directory list & regex compilation ---
     auto getDirSettings = [this]() {
         std::vector<DirectoryEntry> out;
         int n = ui->directoryListWidget->topLevelItemCount();
@@ -329,6 +360,9 @@ SearchSettings MainWindow::collectSearchSettings() const
         return out;
     };
     s.directories = getDirSettings();
+
+    s.thumbnailsPerVideo = std::clamp(ui->thumbnailsSpin->value(), 1, 4);
+
     compileAllRegexes(s);
 
     return s;

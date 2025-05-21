@@ -77,11 +77,16 @@ private:
     // used if you want to know where each group starts
     std::vector<int> m_groupBoundaries;
 
+    int m_thumbnailsPerVideo {4};
+
     void markAllExceptLargestInRange(int startRow, int endRow);
     void markAllExceptSmallestInRange(int startRow, int endRow);
 
 
     bool setData(const QModelIndex &index, const QVariant &value, int role) override;
+
+public:
+    void setThumbnailsPerVideo(int n);
 
 };
 

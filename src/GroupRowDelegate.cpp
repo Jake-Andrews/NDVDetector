@@ -7,6 +7,7 @@
 #include <QPainterPath>
 #include <QStyledItemDelegate>
 #include <QTableView>
+#include <algorithm>
 
 GroupRowDelegate::GroupRowDelegate(QObject* parent)
     : QStyledItemDelegate(parent)
@@ -65,12 +66,22 @@ QSize GroupRowDelegate::sizeHint(QStyleOptionViewItem const& option,
     auto const* model = static_cast<VideoModel const*>(index.model());
     auto const& rowInfo = model->rowEntry(index.row());
 
+    // special handling for separator rows
     if (rowInfo.type == RowType::Separator) {
         QFontMetrics fm(option.font);
-        return QSize(option.rect.width(), fm.height() + 16);
+        return { option.rect.width(), fm.height() + 16 };
     }
 
-    return QStyledItemDelegate::sizeHint(option, index);
+    // normal rows
+    QSize sz = QStyledItemDelegate::sizeHint(option, index);
+
+    // enlarge height for screenshot column so all thumbs fit
+    if (index.column() == VideoModel::Col_Screenshot) {
+        auto* tv = qobject_cast<QTableView const*>(option.widget);
+        int cell = tv ? tv->iconSize().height() : 128; // single-thumb height
+        sz.setHeight(cell);                            // always one row
+    }
+    return sz;
 }
 
 bool GroupRowDelegate::editorEvent(QEvent* event, QAbstractItemModel* model,

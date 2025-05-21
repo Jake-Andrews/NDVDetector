@@ -5,6 +5,7 @@
 #include <regex>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 extern "C" {
 #include <libavutil/hwcontext.h>
@@ -37,6 +38,8 @@ struct SearchSettings {
     std::optional<std::uint64_t> minBytes, maxBytes;
     std::vector<DirectoryEntry>  directories;
 
+    int thumbnailsPerVideo = 4;          // 1-4 allowed
+
     std::vector<std::regex> includeFileRx, includeDirRx,
                             excludeFileRx, excludeDirRx;
 };
@@ -50,7 +53,8 @@ inline void to_json(nlohmann::json& j, const SearchSettings& s) {
         {"includeDirPatterns", s.includeDirPatterns},
         {"excludeFilePatterns", s.excludeFilePatterns},
         {"excludeDirPatterns", s.excludeDirPatterns},
-        {"directories", s.directories}
+        {"directories", s.directories},
+        {"thumbnailsPerVideo", s.thumbnailsPerVideo}
     };
 
     j["minBytes"] = s.minBytes.has_value() ? nlohmann::json(*s.minBytes) : nullptr;
@@ -66,6 +70,12 @@ inline void from_json(const nlohmann::json& j, SearchSettings& s) {
     j.at("excludeFilePatterns").get_to(s.excludeFilePatterns);
     j.at("excludeDirPatterns").get_to(s.excludeDirPatterns);
     j.at("directories").get_to(s.directories);
+
+    if (j.contains("thumbnailsPerVideo"))
+        j.at("thumbnailsPerVideo").get_to(s.thumbnailsPerVideo);
+    else
+        s.thumbnailsPerVideo = 4;
+    s.thumbnailsPerVideo = std::clamp(s.thumbnailsPerVideo, 1, 4);
 
     if (j.contains("minBytes") && !j.at("minBytes").is_null())
         s.minBytes = j.at("minBytes").get<std::uint64_t>();

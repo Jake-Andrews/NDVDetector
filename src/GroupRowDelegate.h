@@ -9,6 +9,9 @@ class GroupRowDelegate : public QStyledItemDelegate
 public:
     explicit GroupRowDelegate(QObject* parent = nullptr);
 
+    void setThumbnailsPerVideo(int n)          { m_thumbs = std::clamp(n,1,4); }
+    int  thumbnailsPerVideo() const            { return m_thumbs; }
+
     void paint(QPainter* painter,
                const QStyleOptionViewItem& option,
                const QModelIndex& index) const override;
@@ -19,5 +22,7 @@ public:
     bool editorEvent(QEvent* event, QAbstractItemModel* model, 
                     const QStyleOptionViewItem& option, 
                     const QModelIndex& index) override;
+private:
+    int m_thumbs = 4;          // 1-4
 };
 
