@@ -1,6 +1,7 @@
 #include "Hash.h"
 #include "UnionFind.h"
 #include "VideoInfo.h"
+#include <cmath>
 #include <hft/hftrie.hpp>
 #include <spdlog/spdlog.h>
 #include <unordered_map>
@@ -18,20 +19,31 @@
  *   pHashes are then grouped together as duplicates using a Union-Find
  *   data structure.
  *
- * \param videos         A list of `VideoInfo` objects representing
+ * \param videos A list of `VideoInfo` objects representing
  *   all videos from the database. This is used to map video IDs to
  *   their full information and to construct the final groups of duplicates.
- * \param hashGroups     A list where each `HashGroup` contains a
+ *
+ * \param hashGroups A list where each `HashGroup` contains a
  *   video's ID (`fk_hash_video`) and a collection of its
  *   pHashes (`hashes`).
- * \param searchRange    The maximum Hamming distance allowed when
+ *
+ * \param searchRange The maximum Hamming distance allowed when
  *   searching for similar pHashes in the HFTrie.
- * \param matchThreshold The minimum number of "close" pHashes
+ *
+ * \param usePercentThreshold If true, 'percentThreshold' is used to
+ *   determine the minimum number of hashes that have to match
+ *   between two videos for the videos to be considered duplicates.
+ *
+ * \param percentThreshold When comparing two
+ *   videos hashes the larger number of hashes is multiplied by
+ *   percentThreshold and this product determines the minimum
+ *   number of "close" pHashes (as defined by 'searchRange')
+ *   two videos must share to be considered potential
+ *   duplicates of each other.
+ *
+ * \param numberThreshold The minimum number of "close" pHashes
  *   (as defined by `searchRange`) two videos must share to be
  *   considered potential duplicates of each other.
- *   This acts as a filter to ensure that videos are only flagged as
- *   duplicates if they have a substantial amount of similar content,
- *   not just a few coincidentally close pHashes.
  *
  * \return A vector of vectors, where each inner vector contains
  *   `VideoInfo` objects for a group of videos identified as
@@ -48,7 +60,9 @@ std::vector<std::vector<VideoInfo>>
 findDuplicates(std::vector<VideoInfo> videos,
     std::vector<HashGroup> const& hashGroups,
     uint64_t searchRange,
-    int matchThreshold)
+    bool usePercentThreshold,
+    double percentThreshold,
+    std::uint64_t numberThreshold)
 {
     if (g_duplicateDebugEnabled)
         spdlog::info("[DuplicateDetector] start: videos={}, hashGroups={}",
@@ -59,9 +73,6 @@ findDuplicates(std::vector<VideoInfo> videos,
     for (auto const& group : hashGroups) {
         for (auto h : group.hashes) {
             trie.Insert({ group.fk_hash_video, h });
-            if (g_duplicateDebugEnabled)
-                spdlog::debug("[DuplicateDetector] vid={}  pHash={:016x}",
-                    group.fk_hash_video, h);
         }
     }
 
@@ -71,6 +82,12 @@ findDuplicates(std::vector<VideoInfo> videos,
     for (int i = 0; i < static_cast<int>(videos.size()); ++i) {
         idToIndex[videos[i].id] = i;
     }
+
+    // Map video-id -> number of hashes (for percentage threshold)
+    std::unordered_map<int, std::size_t> hashCount;
+    hashCount.reserve(hashGroups.size());
+    for (auto const& g : hashGroups)
+        hashCount[g.fk_hash_video] = g.hashes.size();
 
     if (g_duplicateDebugEnabled)
         spdlog::info("[DuplicateDetector] built id→index map ({} entries)", idToIndex.size());
@@ -98,12 +115,23 @@ findDuplicates(std::vector<VideoInfo> videos,
             }
         }
 
-        // find videos that appear >= matchThreshold times
         std::unordered_set<int> likelyMatches;
         for (auto const& [videoId, count] : matchCounts) {
-            if (count >= matchThreshold && videoId != group.fk_hash_video) {
-                likelyMatches.insert(videoId);
+            if (videoId == group.fk_hash_video)
+                continue;
+
+            std::size_t required;
+            if (usePercentThreshold) {
+                std::size_t longer = std::max(hashCount[group.fk_hash_video],
+                    hashCount[videoId]);
+                required = static_cast<std::size_t>(
+                    std::ceil(longer * percentThreshold / 100.0));
+            } else {
+                required = numberThreshold;
             }
+
+            if (count >= static_cast<int>(required))
+                likelyMatches.insert(videoId);
         }
 
         // store edges in duplicates vector for union-find

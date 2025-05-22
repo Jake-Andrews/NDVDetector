@@ -7,6 +7,8 @@
 
 std::vector<std::vector<VideoInfo>>
 findDuplicates(std::vector<VideoInfo> videos,
-    std::vector<HashGroup> const& hashGroups,
-    uint64_t searchRange,
-    int matchThreshold);
+               std::vector<HashGroup> const& hashGroups,
+               uint64_t searchRange,
+               bool    usePercentThreshold,
+               double  percentThreshold,          // 1-100
+               std::uint64_t numberThreshold);    // absolute count

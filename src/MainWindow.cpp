@@ -35,6 +35,19 @@ MainWindow::MainWindow(DatabaseManager* db, QWidget* parent)
 {
     ui->setupUi(this);
 
+    // --- matching-threshold radio buttons ---
+    auto updateThresholdWidgets = [this](bool numMode) {
+        ui->matchingThresholdNumSpinBox->setEnabled(numMode);
+        ui->matchingThresholdPercentSpinBox->setEnabled(!numMode);
+    };
+    connect(ui->fixedNumThresholdRadio, &QRadioButton::toggled,
+        this, updateThresholdWidgets);
+    connect(ui->percentThresholdRadio, &QRadioButton::toggled,
+        this, [updateThresholdWidgets](bool on) { updateThresholdWidgets(!on); });
+
+    // force correct initial state
+    updateThresholdWidgets(ui->fixedNumThresholdRadio->isChecked());
+
     // -- video list view setup --
     auto* view = ui->tableView;
     view->setModel(m_model.get());

@@ -236,7 +236,7 @@
            <item row="13" column="0">
             <widget class="QLabel" name="maxFramesLabel">
               <property name="text">
-                <string>Maximum number of frames</string>
+                <string>Maximum number of frames to hash per video</string>
               </property>
             </widget>
            </item>
@@ -245,6 +245,91 @@
               <property name="minimum"><number>10</number></property>
               <property name="maximum"><number>2147483647</number></property>
               <property name="value"><number>2147483647</number></property>
+            </widget>
+           </item>
+           <item row="14" column="0">
+            <widget class="QRadioButton" name="fixedNumThresholdRadio">
+             <property name="text">
+              <string>Match threshold (number):</string>
+             </property>
+             <property name="checked">
+              <bool>true</bool> </property>
+            </widget>
+           </item>
+           <item row="14" column="1">
+            <widget class="QSpinBox" name="matchingThresholdNumSpinBox">
+             <property name="toolTip">
+              <string>The minimum number of matching hashes needed to consider a video a duplicate.</string>
+             </property>
+             <property name="minimum">
+              <number>1</number>
+             </property>
+             <property name="maximum">
+              <number>1000</number> </property>
+             <property name="value">
+              <number>5</number> </property>
+            </widget>
+           </item>
+
+           <item row="15" column="0">
+            <widget class="QRadioButton" name="percentThresholdRadio">
+             <property name="text">
+              <string>Match threshold (percent):</string>
+             </property>
+             <property name="checked">
+              <bool>false</bool>
+             </property>
+            </widget>
+           </item>
+           <item row="15" column="1">
+            <layout class="QHBoxLayout" name="horizontalLayout_matchPercent">
+             <item>
+              <widget class="QDoubleSpinBox" name="matchingThresholdPercentSpinBox">
+               <property name="enabled">
+                <bool>false</bool> </property>
+               <property name="toolTip">
+                <string>The minimum percentage of matching hashes needed to consider a video a duplicate as a percent of the longer videos duration.</string>
+               </property>
+               <property name="minimum">
+                <double>1.0</double>
+               </property>
+               <property name="maximum">
+                <double>100.0</double>
+               </property>
+               <property name="singleStep">
+                <double>1.0</double>
+               </property>
+               <property name="value">
+                <double>50.0</double> </property>
+               <property name="decimals">
+                <number>1</number>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="percentSymbolLabel">
+               <property name="text">
+                <string>%</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item row="16" column="0">
+            <widget class="QLabel" name="hammingDistanceThresholdLabel">
+               <property name="toolTip">
+                <string>The maximum Hamming distance allowed between two hashes to consider them a match.</string>
+               </property>
+              <property name="text">
+                <string>Hamming distance threshold (1-64) </string>
+              </property>
+            </widget>
+           </item>
+           <item row="16" column="1">
+            <widget class="QSpinBox" name="hammingDistanceThresholdSpin">
+              <property name="minimum"><number>0</number></property>
+              <property name="maximum"><number>64</number></property>
+              <property name="value"><number>4</number></property>
             </widget>
            </item>
           </layout>

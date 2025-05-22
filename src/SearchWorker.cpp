@@ -33,7 +33,7 @@ void SearchWorker::process()
     try {
         spdlog::info("[worker] Starting search task");
 
-        // 1. Enumerate video files
+        // --- Enumerate video files ---
         std::vector<VideoInfo> allVideos;
 
         for (auto const& dir : m_cfg.directories) {
@@ -52,7 +52,7 @@ void SearchWorker::process()
             }
         }
 
-        // 2. Filter videos already known to the DB
+        // --- Filter videos already known to the DB ---
         std::unordered_set<std::string> known;
         auto dbVideos = m_db.getAllVideos();
         known.reserve(dbVideos.size());
@@ -62,13 +62,18 @@ void SearchWorker::process()
         std::erase_if(allVideos, [&](VideoInfo const& v) { return known.contains(v.path); });
         spdlog::info("[worker] {} new videos to process", allVideos.size());
 
-        // 3. Metadata, thumbnails & DB insertion
+        // --- Metadata, thumbnails & DB insertion ---
         doExtractionAndDetection(allVideos);
 
-        // ── 4. Duplicate detection & persistence ──────────────
+        // --- Duplicate detection & persistence ---
         auto all = m_db.getAllVideos();
         auto hashes = m_db.getAllHashGroups();
-        auto groups = findDuplicates(std::move(all), hashes, 4, 3);
+
+        auto groups = findDuplicates(std::move(all), hashes,
+            m_cfg.hammingDistanceThreshold,
+            m_cfg.usePercentThreshold,
+            m_cfg.matchingThresholdPercent,
+            m_cfg.matchingThresholdNumber);
         m_db.storeDuplicateGroups(groups);
 
         emit finished(std::move(groups));
@@ -89,7 +94,7 @@ void SearchWorker::doExtractionAndDetection(std::vector<VideoInfo>& videos)
     int metaTotal = static_cast<int>(videos.size());
     emit metadataProgress(0, metaTotal);
 
-    // Step A – metadata / thumbnail / initial DB insert
+    // --- metadata / thumbnail / initial DB insert ---
     spdlog::info("Thumbnail/FFprobe started");
 
     std::vector<VideoInfo> filtered;
@@ -156,7 +161,7 @@ void SearchWorker::doExtractionAndDetection(std::vector<VideoInfo>& videos)
     int totalToHash = static_cast<int>(videos.size());
     emit hashProgress(0, totalToHash);
 
-    // Step B – pHash extraction & DB insertion
+    // --- pHash extraction & DB insertion ---
     for (auto const& v : videos) {
         try {
             spdlog::info("[hash] Processing '{}'", v.path);

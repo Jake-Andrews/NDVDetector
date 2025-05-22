@@ -38,12 +38,18 @@ struct SearchSettings {
     std::optional<std::uint64_t> minBytes, maxBytes;
     std::vector<DirectoryEntry>  directories;
 
-    int thumbnailsPerVideo = 4;          // 1-4 allowed
-    int skipPercent = 15;
-    int maxFrames = 100;
-
     std::vector<std::regex> includeFileRx, includeDirRx,
-                            excludeFileRx, excludeDirRx;
+    excludeFileRx, excludeDirRx;
+
+    // --- hashing related ---
+    int thumbnailsPerVideo = 4; // 1-4 
+    int skipPercent = 15; // 0-40
+    int maxFrames = 2147483647; // 10-2147483647
+    int hammingDistanceThreshold = 4; // 0-64
+
+    bool usePercentThreshold = false; // radio-button state
+    double matchingThresholdPercent = 50.0; // 1-100
+    std::uint64_t matchingThresholdNumber = 5; // 1-1000
 };
 
 inline void to_json(nlohmann::json& j, const SearchSettings& s) {
@@ -56,7 +62,11 @@ inline void to_json(nlohmann::json& j, const SearchSettings& s) {
         {"excludeFilePatterns", s.excludeFilePatterns},
         {"excludeDirPatterns", s.excludeDirPatterns},
         {"directories", s.directories},
-        {"thumbnailsPerVideo", s.thumbnailsPerVideo}
+        {"thumbnailsPerVideo", s.thumbnailsPerVideo},
+        {"usePercentThreshold", s.usePercentThreshold},
+        {"matchingThresholdPercent", s.matchingThresholdPercent},
+        {"matchingThresholdNumber", s.matchingThresholdNumber},
+        {"hammingDistanceThreshold", s.hammingDistanceThreshold}
     };
 
     j["minBytes"] = s.minBytes.has_value() ? nlohmann::json(*s.minBytes) : nullptr;
@@ -88,8 +98,34 @@ inline void from_json(const nlohmann::json& j, SearchSettings& s) {
         s.maxBytes = j.at("maxBytes").get<std::uint64_t>();
     else
         s.maxBytes = std::nullopt;
-}
 
+    if (j.contains("usePercentThreshold"))
+        j.at("usePercentThreshold").get_to(s.usePercentThreshold);
+    else
+        s.usePercentThreshold = false;
+
+    if (j.contains("matchingThresholdPercent"))
+        j.at("matchingThresholdPercent").get_to(s.matchingThresholdPercent);
+    else
+        s.matchingThresholdPercent = 50.0;
+
+    s.matchingThresholdPercent = std::clamp(s.matchingThresholdPercent, 1.0, 100.0);
+
+    if (j.contains("matchingThresholdNumber"))
+        j.at("matchingThresholdNumber").get_to(s.matchingThresholdNumber);
+    else
+        s.matchingThresholdNumber = 5;
+
+    s.matchingThresholdNumber =
+        std::clamp<std::uint64_t>(s.matchingThresholdNumber, 1, 10000);
+
+    if (j.contains("hammingDistanceThreshold"))
+        j.at("hammingDistanceThreshold").get_to(s.hammingDistanceThreshold);
+    else
+        s.hammingDistanceThreshold = 4;
+
+    s.hammingDistanceThreshold = std::clamp(s.hammingDistanceThreshold, 0, 64);
+}
 
 namespace detail {
 inline std::string globToRegex(std::string_view glob) {
