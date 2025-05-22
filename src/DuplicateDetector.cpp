@@ -9,21 +9,39 @@
 
 /*!
  * \brief findDuplicates
- *        Detects duplicate videos based on pHashes.
+ * Detects duplicate videos by comparing their pHashes.
  *
- * \param videos        A list of all VideoInfo from DB.
- * \param hashGroups    Each HashGroup has 'fk_hash_video' + 'hashes' for that video.
- * \param searchRange   The Hamming distance threshold for RangeSearchFast.
- * \param matchThreshold The minimum number of matching hashes needed to consider a video a duplicate.
+ * This function works by first building a searchable structure
+ *   (HFTrie) of all pHashes from all videos. Then, for each video, it
+ *   queries this structure to find other videos that have a
+ *   significant number of "close" pHashes. Videos with enough matching
+ *   pHashes are then grouped together as duplicates using a Union-Find
+ *   data structure.
  *
- * \return A vector of vector's each containing VideoInfo duplicates.
+ * \param videos         A list of `VideoInfo` objects representing
+ *   all videos from the database. This is used to map video IDs to
+ *   their full information and to construct the final groups of duplicates.
+ * \param hashGroups     A list where each `HashGroup` contains a
+ *   video's ID (`fk_hash_video`) and a collection of its
+ *   pHashes (`hashes`).
+ * \param searchRange    The maximum Hamming distance allowed when
+ *   searching for similar pHashes in the HFTrie.
+ * \param matchThreshold The minimum number of "close" pHashes
+ *   (as defined by `searchRange`) two videos must share to be
+ *   considered potential duplicates of each other.
+ *   This acts as a filter to ensure that videos are only flagged as
+ *   duplicates if they have a substantial amount of similar content,
+ *   not just a few coincidentally close pHashes.
+ *
+ * \return A vector of vectors, where each inner vector contains
+ *   `VideoInfo` objects for a group of videos identified as
+ *   duplicates of each other.
  */
 
 namespace {
 bool g_duplicateDebugEnabled = true;
 }
 
-// Call this from outside to enable/disable extra logging.
 void setDuplicateDetectorDebug(bool enable) { g_duplicateDebugEnabled = enable; }
 
 std::vector<std::vector<VideoInfo>>
@@ -36,7 +54,7 @@ findDuplicates(std::vector<VideoInfo> videos,
         spdlog::info("[DuplicateDetector] start: videos={}, hashGroups={}",
             videos.size(), hashGroups.size());
 
-    // 1) Build HFTrie from all pHashes
+    // --- Build HFTrie from all pHashes ---
     hft::HFTrie trie;
     for (auto const& group : hashGroups) {
         for (auto h : group.hashes) {
@@ -47,7 +65,7 @@ findDuplicates(std::vector<VideoInfo> videos,
         }
     }
 
-    // 2) Build an id->index map for union-find
+    // --- Build an id->index map for union-find ---
     std::unordered_map<int, int> idToIndex;
     idToIndex.reserve(videos.size());
     for (int i = 0; i < static_cast<int>(videos.size()); ++i) {
@@ -57,7 +75,7 @@ findDuplicates(std::vector<VideoInfo> videos,
     if (g_duplicateDebugEnabled)
         spdlog::info("[DuplicateDetector] built id→index map ({} entries)", idToIndex.size());
 
-    // 3) Collect edges in a vector of (indexOfVideoA, indexOfVideoB)
+    // --- Collect edges in a vector of (indexOfVideoA, indexOfVideoB) ---
     std::vector<std::pair<int, int>> duplicates;
 
     // For each HashGroup => do the range search => build match counts => store edges
@@ -103,14 +121,14 @@ findDuplicates(std::vector<VideoInfo> videos,
     if (g_duplicateDebugEnabled)
         spdlog::info("[DuplicateDetector] total duplicate edges={}", duplicates.size());
 
-    // 4) Create union-find for all videos
+    // --- Create union-find for all videos ---
     UnionFind uf(static_cast<int>(videos.size()));
     // unify duplicates
     for (auto const& [i, j] : duplicates) {
         uf.unite(i, j);
     }
 
-    // 5) Build connected components => map root -> list of indexes
+    // --- Build connected components => map root -> list of indexes ---
     std::unordered_map<int, std::vector<int>> comps;
     comps.reserve(videos.size());
     for (int i = 0; i < static_cast<int>(videos.size()); ++i) {
@@ -118,7 +136,7 @@ findDuplicates(std::vector<VideoInfo> videos,
         comps[root].push_back(i);
     }
 
-    // 6) Convert each connected component to a vector of VideoInfo
+    // --- Convert each connected component to a vector of VideoInfo ---
     std::vector<std::vector<VideoInfo>> duplicateGroups;
     duplicateGroups.reserve(comps.size());
     for (auto& [root, members] : comps) {
