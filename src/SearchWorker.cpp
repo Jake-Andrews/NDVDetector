@@ -12,9 +12,6 @@
 #include <filesystem>
 #include <unordered_set>
 
-static constexpr double kSkipPercent = 0.15;
-static constexpr int kMaxFrames = 50;
-
 SearchWorker::SearchWorker(DatabaseManager& db,
     SearchSettings cfg,
     QObject* parent)
@@ -152,9 +149,9 @@ void SearchWorker::doExtractionAndDetection(std::vector<VideoInfo>& videos)
 
             auto phashes = decode_and_hash(
                 v.path,
-                kSkipPercent,
+                m_cfg.skipPercent,
                 v.duration,
-                kMaxFrames,
+                m_cfg.maxFrames,
                 {});
 
             if (phashes.empty()) {

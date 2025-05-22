@@ -361,7 +361,10 @@ SearchSettings MainWindow::collectSearchSettings() const
     };
     s.directories = getDirSettings();
 
+    // --- FFmpeg decoding ---
     s.thumbnailsPerVideo = std::clamp(ui->thumbnailsSpin->value(), 1, 4);
+    s.skipPercent = ui->skipSpin->value();
+    s.maxFrames = ui->maxFramesSpin->value();
 
     compileAllRegexes(s);
 

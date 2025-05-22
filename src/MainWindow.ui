@@ -219,6 +219,34 @@
               <property name="value"><number>4</number></property>
             </widget>
            </item>
+           <item row="12" column="0">
+            <widget class="QLabel" name="skipLabel">
+              <property name="text">
+                <string>Skip percent (0-40%)</string>
+              </property>
+            </widget>
+           </item>
+           <item row="12" column="1">
+            <widget class="QSpinBox" name="skipSpin">
+              <property name="minimum"><number>0</number></property>
+              <property name="maximum"><number>40</number></property>
+              <property name="value"><number>15</number></property>
+            </widget>
+           </item>
+           <item row="13" column="0">
+            <widget class="QLabel" name="maxFramesLabel">
+              <property name="text">
+                <string>Maximum number of frames</string>
+              </property>
+            </widget>
+           </item>
+           <item row="13" column="1">
+            <widget class="QSpinBox" name="maxFramesSpin">
+              <property name="minimum"><number>10</number></property>
+              <property name="maximum"><number>2147483647</number></property>
+              <property name="value"><number>2147483647</number></property>
+            </widget>
+           </item>
           </layout>
          </widget>
         </item>

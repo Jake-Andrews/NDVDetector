@@ -125,7 +125,7 @@ static bool extract_luma_32x32(AVFrame const* src, uint8_t* dst)
 // CPU/Software decoding path
 std::vector<uint64_t> decode_and_hash(
     std::string const& file,
-    double skip_pct,
+    int skip_pct,
     int duration_s,
     int max_frames,
     std::function<void(int)> const& on_progress)
@@ -155,7 +155,7 @@ std::vector<uint64_t> decode_and_hash(
     std::array<uint8_t, KOUTW * KOUTH> lumaTile;
 
     spdlog::info("[sw] decoding '{}' (skip={}%, duration={} s, limit={})",
-        file, skip_pct * 100, duration_s, max_frames);
+        file, skip_pct, duration_s, max_frames);
 
     // --- demuxer open ---
     FmtPtr fmt;
@@ -240,7 +240,9 @@ std::vector<uint64_t> decode_and_hash(
     PktPtr pkt { av_packet_alloc() };
 
     // --- seeking logic ---
-    double pct = std::clamp(skip_pct, 0.0, 0.20);
+    // shouldn't be necessary, incase the UI doesn't properly clamp
+    double pct = std::clamp(skip_pct, 0, 40);
+    pct = pct / 100;
     qint64 file_sz = QFileInfo(QString::fromStdString(file)).size();
     if ((duration_s > 0 && duration_s < 20) || file_sz < 5 * 1024 * 1024) {
         spdlog::info("[sw] small file → skip disabled (was {:.1f}%)", pct * 100);

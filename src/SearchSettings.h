@@ -39,6 +39,8 @@ struct SearchSettings {
     std::vector<DirectoryEntry>  directories;
 
     int thumbnailsPerVideo = 4;          // 1-4 allowed
+    int skipPercent = 15;
+    int maxFrames = 100;
 
     std::vector<std::regex> includeFileRx, includeDirRx,
                             excludeFileRx, excludeDirRx;
