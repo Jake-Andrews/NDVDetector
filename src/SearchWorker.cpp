@@ -10,6 +10,8 @@
 #include <spdlog/spdlog.h>
 
 #include <filesystem>
+#include <future>
+#include <unordered_map>
 #include <unordered_set>
 
 SearchWorker::SearchWorker(DatabaseManager& db,
@@ -91,48 +93,60 @@ void SearchWorker::doExtractionAndDetection(std::vector<VideoInfo>& videos)
     spdlog::info("Thumbnail/FFprobe started");
 
     std::vector<VideoInfo> filtered;
+    std::vector<std::future<std::pair<std::string, std::vector<QString>>>> thumbTasks;
+
     filtered.reserve(videos.size());
+    thumbTasks.reserve(videos.size());
+
     for (auto& v : videos) {
-        bool skip = false;
 
         if (!extract_info(v)) {
             spdlog::warn("[meta] Failed FFprobe extraction – skipping '{}'", v.path);
-            skip = true;
-        } else {
-            // Try to extract thumbnail
-            try {
-                v.thumbnail_path.clear();
-
-                if (auto opt = extract_color_thumbnails(v, m_cfg.thumbnailsPerVideo)) {
-                    v.thumbnail_path.reserve(opt->size());
-                    for (auto const& qpath : *opt)
-                        v.thumbnail_path.push_back(qpath.toStdString());
-                }
-
-                // Fallback when extraction failed or returned nothing
-                if (v.thumbnail_path.empty())
-                    v.thumbnail_path.emplace_back("./sneed.png");
-            } catch (std::exception const& ex) {
-                spdlog::error("[thumbnail] Exception during thumbnail extraction: {}", ex.what());
-                v.thumbnail_path.clear();
-                v.thumbnail_path.emplace_back("./sneed.png"); // fallback logo
-            }
-
-            // Try to insert into database
-            if (auto id = m_db.insertVideo(v)) {
-                v.id = *id;
-            } else {
-                spdlog::error("[DB] Inserting metadata failed for '{}'", v.path);
-                skip = true;
-            }
+            ++metaDone;
+            emit metadataProgress(metaDone, metaTotal);
+            continue;
         }
 
         ++metaDone;
         emit metadataProgress(metaDone, metaTotal);
 
-        if (!skip)
-            filtered.push_back(std::move(v));
+        // copy for the worker thread
+        VideoInfo vCopy = v;
+        thumbTasks.emplace_back(std::async(std::launch::async,
+            [vid = std::move(vCopy),
+                nThumbs = m_cfg.thumbnailsPerVideo]() mutable
+                -> std::pair<std::string, std::vector<QString>> {
+                auto opt = extract_color_thumbnails(vid, nThumbs);
+                return { vid.path, opt ? *opt : std::vector<QString> {} };
+            }));
+        filtered.push_back(std::move(v));
     }
+
+    std::unordered_map<std::string, std::vector<QString>> thumbMap;
+    for (auto& fut : thumbTasks) {
+        // blocks only for unfinished tasks
+        auto [path, qthumbs] = fut.get();
+        thumbMap.emplace(std::move(path), std::move(qthumbs));
+    }
+
+    for (auto& v : filtered) {
+        if (auto it = thumbMap.find(v.path); it != thumbMap.end()) {
+            v.thumbnail_path.clear();
+            v.thumbnail_path.reserve(it->second.size());
+            for (auto const& q : it->second)
+                v.thumbnail_path.push_back(q.toStdString());
+        }
+        // universal fallback
+        if (v.thumbnail_path.empty())
+            v.thumbnail_path.emplace_back("./sneed.png");
+
+        // DB work kept serial
+        if (auto id = m_db.insertVideo(v))
+            v.id = *id;
+        else
+            spdlog::error("[DB] Inserting metadata failed for '{}'", v.path);
+    }
+    // preserve original contract
     videos.swap(filtered);
 
     spdlog::info("Thumbnail/FFprobe finished");
