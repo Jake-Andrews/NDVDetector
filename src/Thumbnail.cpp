@@ -8,10 +8,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <limits>
 #include <optional>
 #include <spdlog/spdlog.h>
 #include <vector>
+
+#include "VideoProcessingUtils.h"
+using namespace vpu;
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -24,48 +26,22 @@ extern "C" {
 
 namespace {
 
-inline void free_format_ctx(AVFormatContext* ctx)
-{
-    if (ctx)
-        avformat_close_input(&ctx);
-}
-inline void free_codec_ctx(AVCodecContext* ctx)
-{
-    if (ctx)
-        avcodec_free_context(&ctx);
-}
-inline void free_sws_ctx(SwsContext* ctx)
-{
-    if (ctx)
-        sws_freeContext(ctx);
-}
-inline void fr_free(AVFrame* f)
-{
-    if (f)
-        av_frame_free(&f);
-}
-inline void pk_free(AVPacket* p)
-{
-    if (p)
-        av_packet_free(&p);
-}
+struct SwsDeleter {
+    void operator()(SwsContext* c) const noexcept
+    {
+        if (c)
+            sws_freeContext(c);
+    }
+};
+using SwsPtr = std::unique_ptr<SwsContext, SwsDeleter>;
 
-using FormatCtxPtr = std::unique_ptr<AVFormatContext, decltype(&free_format_ctx)>;
-using CtxPtr = std::unique_ptr<AVCodecContext, decltype(&free_codec_ctx)>;
-using SwsContextPtr = std::unique_ptr<SwsContext, decltype(&free_sws_ctx)>;
-using FrmPtr = std::unique_ptr<AVFrame, decltype(&fr_free)>;
-using PktPtr = std::unique_ptr<AVPacket, decltype(&pk_free)>;
-
-// Very small utility: SHA-1 of the path, returned as hex
+// SHA-1 of the path, returned as hex
 inline QString hashPath(QString const& path)
 {
     return QCryptographicHash::hash(path.toUtf8(),
         QCryptographicHash::Sha1)
         .toHex();
 }
-
-inline bool copyFrameToImage(AVFrame const* frame, QImage& image,
-    int width, int height);
 
 inline bool copyFrameToImage(AVFrame const* frame, QImage& image, int width, int height)
 {
@@ -79,7 +55,6 @@ inline bool copyFrameToImage(AVFrame const* frame, QImage& image, int width, int
         int const rowBytes = std::min<int>(frame->linesize[0],
             image.bytesPerLine());
 
-        // Log frame details for diagnostics
         spdlog::debug("[Thumbnail] Frame format: linesize={}, width={}, height={}, format={}",
             frame->linesize[0], frame->width, frame->height, frame->format);
 
@@ -141,7 +116,7 @@ extract_color_thumbnails(VideoInfo const& info,
             spdlog::warn("[Thumbnail] Failed to open: {} ({})", filePath, errBuf);
             return std::nullopt;
         }
-        FormatCtxPtr fmtCtx(rawFmt, &free_format_ctx);
+        FmtPtr fmtCtx(rawFmt);
 
         int infoResult = avformat_find_stream_info(fmtCtx.get(), nullptr);
         if (infoResult < 0) {
@@ -173,7 +148,7 @@ extract_color_thumbnails(VideoInfo const& info,
         }
 
         // Set up decoder
-        CtxPtr codecCtx(avcodec_alloc_context3(codec), &free_codec_ctx);
+        CtxPtr codecCtx(avcodec_alloc_context3(codec));
         if (!codecCtx) {
             spdlog::error("[Thumbnail] Failed to allocate codec context for {}", filePath);
             return std::nullopt;
@@ -183,6 +158,14 @@ extract_color_thumbnails(VideoInfo const& info,
             spdlog::warn("[Thumbnail] Failed to copy codec parameters for {}", filePath);
             return std::nullopt;
         }
+
+        // optimisation flags – match FastVideoProcessor
+        codecCtx->thread_type = FF_THREAD_FRAME;
+        codecCtx->flags2 |= AV_CODEC_FLAG2_FAST;
+        codecCtx->skip_idct = AVDISCARD_ALL;
+        codecCtx->skip_loop_filter = AVDISCARD_ALL;
+        unsigned tc = std::thread::hardware_concurrency();
+        codecCtx->thread_count = tc ? tc : 1; // ≥1 thread
 
         int openCodecResult = avcodec_open2(codecCtx.get(), codec, nullptr);
         if (openCodecResult < 0) {
@@ -219,7 +202,6 @@ extract_color_thumbnails(VideoInfo const& info,
                 vStream->time_base);
             targets.push_back(pts);
         }
-        constexpr int kMaxProbeFrames = 512; // big GOPs near the beginning need more packets
         //-------------------------------------------------------------
 
         // Add this before setting up the scaler
@@ -252,12 +234,11 @@ extract_color_thumbnails(VideoInfo const& info,
         constexpr int kThumbH = 128;
         constexpr AVPixelFormat outPixFmt = AV_PIX_FMT_RGB24;
 
-        SwsContextPtr swsCtx(
+        SwsPtr swsCtx(
             sws_getContext(codecCtx->width, codecCtx->height,
                 codecCtx->pix_fmt,
                 kThumbW, kThumbH, outPixFmt,
-                scalingAlgorithm, nullptr, nullptr, nullptr),
-            &free_sws_ctx);
+                scalingAlgorithm, nullptr, nullptr, nullptr));
 
         if (!swsCtx) {
             spdlog::warn("[Thumbnail] sws_getContext failed for {}", filePath);
@@ -265,9 +246,9 @@ extract_color_thumbnails(VideoInfo const& info,
         }
 
         // Allocate frames and packet
-        FrmPtr srcFrame(av_frame_alloc(), &fr_free);
-        FrmPtr rgbFrame(av_frame_alloc(), &fr_free);
-        PktPtr pkt(av_packet_alloc(), &pk_free);
+        FrmPtr srcFrame(av_frame_alloc());
+        FrmPtr rgbFrame(av_frame_alloc());
+        PktPtr pkt(av_packet_alloc());
 
         if (!srcFrame || !rgbFrame || !pkt) {
             spdlog::error("[Thumbnail] Failed to allocate frames or packet");
@@ -300,125 +281,61 @@ extract_color_thumbnails(VideoInfo const& info,
         for (int idx = 0; idx < thumbnailsToGenerate; ++idx) {
 
             bool gotFrameForIdx = false;
-            int probe = 0;
 
-            int seekResult = avformat_seek_file(fmtCtx.get(), videoStreamIdx,
-                std::numeric_limits<int64_t>::min(),
-                targets[idx],
-                std::numeric_limits<int64_t>::max(),
-                AVSEEK_FLAG_ANY);
-
-            if (seekResult < 0) {
-                char errBuf[AV_ERROR_MAX_STRING_SIZE] = { 0 };
-                av_strerror(seekResult, errBuf, sizeof(errBuf));
-                spdlog::error("[Thumbnail] Seek failed at idx {}: {}", idx, errBuf);
+            // seek to closest key-frame around target pts
+            if (av_seek_frame(fmtCtx.get(),
+                    videoStreamIdx,
+                    targets[idx],
+                    AVSEEK_FLAG_ANY)
+                < 0) {
+                spdlog::warn("[Thumbnail] seek failed for thumb {}", idx);
                 continue;
             }
-
             avcodec_flush_buffers(codecCtx.get());
+            avformat_flush(fmtCtx.get());
 
-            spdlog::debug("[Thumbnail] Seeking to target[{}] = {} ({}s)",
-                idx, targets[idx],
-                static_cast<double>(targets[idx]) * av_q2d(vStream->time_base));
-
-            int readResult;
-            while (probe < kMaxProbeFrames) {
-                readResult = av_read_frame(fmtCtx.get(), pkt.get());
-                if (readResult < 0) {
-                    char errBuf[AV_ERROR_MAX_STRING_SIZE] = { 0 };
-                    av_strerror(readResult, errBuf, sizeof(errBuf));
-                    spdlog::error("[Thumbnail] Failed to read frame at probe {}: {}", probe, errBuf);
-                    break;
-                }
-                ++probe;
-
+            // read packets until first decoded frame of this stream
+            while (!gotFrameForIdx && av_read_frame(fmtCtx.get(), pkt.get()) >= 0) {
                 if (pkt->stream_index != videoStreamIdx) {
                     av_packet_unref(pkt.get());
                     continue;
                 }
-
-                if (pkt->size <= 0) {
-                    spdlog::warn("[Thumbnail] Skipping invalid packet size: {}", pkt->size);
+                if (avcodec_send_packet(codecCtx.get(), pkt.get()) < 0) {
                     av_packet_unref(pkt.get());
                     continue;
                 }
+                av_packet_unref(pkt.get());
 
-                int sendResult = avcodec_send_packet(codecCtx.get(), pkt.get());
-                av_packet_unref(pkt.get()); // Always unref regardless of send result
-
-                if (sendResult < 0) {
-                    char errBuf[AV_ERROR_MAX_STRING_SIZE] = { 0 };
-                    av_strerror(sendResult, errBuf, sizeof(errBuf));
-                    spdlog::debug("[Thumbnail] Send packet error: {}", errBuf);
-                    continue;
-                }
-
-                int receiveResult;
-                while ((receiveResult = avcodec_receive_frame(codecCtx.get(), srcFrame.get())) >= 0) {
-                    // Log frame timing details
-                    double framePts = (srcFrame->best_effort_timestamp != AV_NOPTS_VALUE)
-                        ? srcFrame->best_effort_timestamp
-                        : srcFrame->pts;
-                    spdlog::debug("[Thumbnail] Frame {} timing - PTS: {}", probe, framePts);
-
-                    // Accept the very first decoded frame for that seek
-                    int scaleResult = sws_scale(swsCtx.get(),
-                        srcFrame->data, srcFrame->linesize,
-                        0, srcFrame->height,
-                        rgbFrame->data, rgbFrame->linesize);
-
-                    if (scaleResult <= 0) {
-                        spdlog::warn("[Thumbnail] Failed to scale frame: {}", scaleResult);
+                while (avcodec_receive_frame(codecCtx.get(), srcFrame.get()) >= 0) {
+                    // scale
+                    if (sws_scale(swsCtx.get(),
+                            srcFrame->data, srcFrame->linesize,
+                            0, srcFrame->height,
+                            rgbFrame->data, rgbFrame->linesize)
+                        <= 0) {
+                        av_frame_unref(srcFrame.get());
                         continue;
                     }
 
-                    // Convert to QImage
                     QImage img(kThumbW, kThumbH, QImage::Format_RGB888);
-
                     if (!copyFrameToImage(rgbFrame.get(), img, kThumbW, kThumbH)) {
-                        spdlog::error("[Thumbnail] Failed to copy frame to QImage");
+                        av_frame_unref(srcFrame.get());
                         continue;
                     }
 
-                    // Save thumbnail with a unique name based on file hash and index
                     QString thumbPath = outDir.filePath(
                         base + "_" + hash.left(8) + QString("_thumb-%1.jpg").arg(idx, 3, 10, QLatin1Char('0')));
-
-                    int64_t frameDurationPts = 0;
-                    if (vStream->avg_frame_rate.num > 0 && vStream->avg_frame_rate.den > 0)
-                        frameDurationPts = av_rescale_q(1, av_inv_q(vStream->avg_frame_rate),
-                            vStream->time_base);
-                    else if (vStream->r_frame_rate.num > 0 && vStream->r_frame_rate.den > 0)
-                        frameDurationPts = av_rescale_q(1, av_inv_q(vStream->r_frame_rate),
-                            vStream->time_base);
-                    // fallback: assume 30 fps
-                    if (frameDurationPts == 0)
-                        frameDurationPts = av_rescale_q(1, AVRational { 1, 30 }, vStream->time_base);
-
                     if (img.save(thumbPath, "JPEG", 85)) {
-                        spdlog::debug("[Thumbnail] Successfully saved thumbnail: {}", thumbPath.toStdString());
                         results.push_back(thumbPath);
                         gotFrameForIdx = true;
-                        break;
-                    } else {
-                        spdlog::error("[Thumbnail] Failed to save image at {}",
-                            thumbPath.toStdString());
-                        // don't return, just try next probe
                     }
-                }
-
-                if (gotFrameForIdx) {
-                    break; // leave pkt-reading loop, move to next target idx
-                }
-
-                if (receiveResult < 0 && receiveResult != AVERROR(EAGAIN) && receiveResult != AVERROR_EOF) {
-                    char errBuf[AV_ERROR_MAX_STRING_SIZE] = { 0 };
-                    av_strerror(receiveResult, errBuf, sizeof(errBuf));
-                    spdlog::debug("[Thumbnail] Receive frame error: {}", errBuf);
+                    av_frame_unref(srcFrame.get());
+                    break; // first frame only
                 }
             }
+
             if (!gotFrameForIdx)
-                spdlog::warn("[Thumbnail] Unable to create thumbnail {} for '{}'", idx, filePath);
+                spdlog::warn("[Thumbnail] Could not create thumbnail {} for '{}'", idx, filePath);
         }
 
         return results.empty() ? std::nullopt
@@ -473,7 +390,7 @@ extract_color_thumbnails_precise(VideoInfo const& info,
             spdlog::warn("[Thumbnail] Failed to open: {} ({})", filePath, errBuf);
             return std::nullopt;
         }
-        FormatCtxPtr fmtCtx(rawFmt, &free_format_ctx);
+        FmtPtr fmtCtx(rawFmt);
 
         int infoResult = avformat_find_stream_info(fmtCtx.get(), nullptr);
         if (infoResult < 0) {
@@ -505,7 +422,7 @@ extract_color_thumbnails_precise(VideoInfo const& info,
         }
 
         // Set up decoder
-        CtxPtr codecCtx(avcodec_alloc_context3(codec), &free_codec_ctx);
+        CtxPtr codecCtx(avcodec_alloc_context3(codec));
         if (!codecCtx) {
             spdlog::error("[Thumbnail] Failed to allocate codec context for {}", filePath);
             return std::nullopt;
@@ -515,6 +432,13 @@ extract_color_thumbnails_precise(VideoInfo const& info,
             spdlog::warn("[Thumbnail] Failed to copy codec parameters for {}", filePath);
             return std::nullopt;
         }
+
+        codecCtx->thread_type = FF_THREAD_FRAME;
+        // codecCtx->flags2 |= AV_CODEC_FLAG2_FAST;
+        codecCtx->skip_idct = AVDISCARD_ALL;
+        // codecCtx->skip_loop_filter = AVDISCARD_ALL;
+        unsigned tc = std::thread::hardware_concurrency();
+        codecCtx->thread_count = tc ? tc : 1; // ≥1 thread
 
         int openCodecResult = avcodec_open2(codecCtx.get(), codec, nullptr);
         if (openCodecResult < 0) {
@@ -551,7 +475,6 @@ extract_color_thumbnails_precise(VideoInfo const& info,
                 vStream->time_base);
             targets.push_back(pts);
         }
-        constexpr int kMaxProbeFrames = 512; // big GOPs near the beginning need more packets
         //-------------------------------------------------------------
 
         // Add this before setting up the scaler
@@ -584,12 +507,11 @@ extract_color_thumbnails_precise(VideoInfo const& info,
         constexpr int kThumbH = 128;
         constexpr AVPixelFormat outPixFmt = AV_PIX_FMT_RGB24;
 
-        SwsContextPtr swsCtx(
+        SwsPtr swsCtx(
             sws_getContext(codecCtx->width, codecCtx->height,
                 codecCtx->pix_fmt,
                 kThumbW, kThumbH, outPixFmt,
-                scalingAlgorithm, nullptr, nullptr, nullptr),
-            &free_sws_ctx);
+                scalingAlgorithm, nullptr, nullptr, nullptr));
 
         if (!swsCtx) {
             spdlog::warn("[Thumbnail] sws_getContext failed for {}", filePath);
@@ -597,9 +519,9 @@ extract_color_thumbnails_precise(VideoInfo const& info,
         }
 
         // Allocate frames and packet
-        FrmPtr srcFrame(av_frame_alloc(), &fr_free);
-        FrmPtr rgbFrame(av_frame_alloc(), &fr_free);
-        PktPtr pkt(av_packet_alloc(), &pk_free);
+        FrmPtr srcFrame(av_frame_alloc());
+        FrmPtr rgbFrame(av_frame_alloc());
+        PktPtr pkt(av_packet_alloc());
 
         if (!srcFrame || !rgbFrame || !pkt) {
             spdlog::error("[Thumbnail] Failed to allocate frames or packet");
@@ -632,134 +554,61 @@ extract_color_thumbnails_precise(VideoInfo const& info,
         for (int idx = 0; idx < thumbnailsToGenerate; ++idx) {
 
             bool gotFrameForIdx = false;
-            int probe = 0;
 
-            int seekResult = avformat_seek_file(fmtCtx.get(), videoStreamIdx,
-                std::numeric_limits<int64_t>::min(),
-                targets[idx],
-                std::numeric_limits<int64_t>::max(),
-                AVSEEK_FLAG_BACKWARD);
-
-            if (seekResult < 0) {
-                char errBuf[AV_ERROR_MAX_STRING_SIZE] = { 0 };
-                av_strerror(seekResult, errBuf, sizeof(errBuf));
-                spdlog::error("[Thumbnail] Seek failed at idx {}: {}", idx, errBuf);
+            // seek to closest key-frame around target pts
+            if (av_seek_frame(fmtCtx.get(),
+                    videoStreamIdx,
+                    targets[idx],
+                    AVSEEK_FLAG_ANY)
+                < 0) {
+                spdlog::warn("[Thumbnail] seek failed for thumb {}", idx);
                 continue;
             }
-
             avcodec_flush_buffers(codecCtx.get());
+            avformat_flush(fmtCtx.get());
 
-            spdlog::debug("[Thumbnail] Seeking to target[{}] = {} ({}s)",
-                idx, targets[idx],
-                static_cast<double>(targets[idx]) * av_q2d(vStream->time_base));
-
-            int readResult;
-            while (probe < kMaxProbeFrames) {
-                readResult = av_read_frame(fmtCtx.get(), pkt.get());
-                if (readResult < 0) {
-                    char errBuf[AV_ERROR_MAX_STRING_SIZE] = { 0 };
-                    av_strerror(readResult, errBuf, sizeof(errBuf));
-                    spdlog::error("[Thumbnail] Failed to read frame at probe {}: {}", probe, errBuf);
-                    break;
-                }
-                ++probe;
-
+            // read packets until first decoded frame of this stream
+            while (!gotFrameForIdx && av_read_frame(fmtCtx.get(), pkt.get()) >= 0) {
                 if (pkt->stream_index != videoStreamIdx) {
                     av_packet_unref(pkt.get());
                     continue;
                 }
-
-                if (pkt->size <= 0) {
-                    spdlog::warn("[Thumbnail] Skipping invalid packet size: {}", pkt->size);
+                if (avcodec_send_packet(codecCtx.get(), pkt.get()) < 0) {
                     av_packet_unref(pkt.get());
                     continue;
                 }
+                av_packet_unref(pkt.get());
 
-                int sendResult = avcodec_send_packet(codecCtx.get(), pkt.get());
-                av_packet_unref(pkt.get()); // Always unref regardless of send result
-
-                if (sendResult < 0) {
-                    char errBuf[AV_ERROR_MAX_STRING_SIZE] = { 0 };
-                    av_strerror(sendResult, errBuf, sizeof(errBuf));
-                    spdlog::debug("[Thumbnail] Send packet error: {}", errBuf);
-                    continue;
-                }
-
-                int receiveResult;
-                while ((receiveResult = avcodec_receive_frame(codecCtx.get(), srcFrame.get())) >= 0) {
-                    // Log frame timing details
-                    double framePts = (srcFrame->best_effort_timestamp != AV_NOPTS_VALUE)
-                        ? srcFrame->best_effort_timestamp
-                        : srcFrame->pts;
-                    double frameTime = framePts * av_q2d(vStream->time_base);
-                    double targetTime = targets[idx] * av_q2d(vStream->time_base);
-
-                    spdlog::debug("[Thumbnail] Frame {} timing - PTS: {}, Time: {:.3f}s, Target: {:.3f}s",
-                        probe, framePts, frameTime, targetTime);
-
-                    // More lenient timestamp comparison - accept frames within 0.1 second of target
-                    if (std::abs(frameTime - targetTime) > 0.1) {
-                        spdlog::debug("[Thumbnail] Frame {} skipped - too far from target", probe);
-                        continue;
-                    }
-                    // Scale the frame to thumbnail size
-                    int scaleResult = sws_scale(swsCtx.get(),
-                        srcFrame->data, srcFrame->linesize,
-                        0, srcFrame->height,
-                        rgbFrame->data, rgbFrame->linesize);
-
-                    if (scaleResult <= 0) {
-                        spdlog::warn("[Thumbnail] Failed to scale frame: {}", scaleResult);
+                while (avcodec_receive_frame(codecCtx.get(), srcFrame.get()) >= 0) {
+                    // scale
+                    if (sws_scale(swsCtx.get(),
+                            srcFrame->data, srcFrame->linesize,
+                            0, srcFrame->height,
+                            rgbFrame->data, rgbFrame->linesize)
+                        <= 0) {
+                        av_frame_unref(srcFrame.get());
                         continue;
                     }
 
-                    // Convert to QImage
                     QImage img(kThumbW, kThumbH, QImage::Format_RGB888);
-
                     if (!copyFrameToImage(rgbFrame.get(), img, kThumbW, kThumbH)) {
-                        spdlog::error("[Thumbnail] Failed to copy frame to QImage");
+                        av_frame_unref(srcFrame.get());
                         continue;
                     }
 
-                    // Save thumbnail with a unique name based on file hash and index
                     QString thumbPath = outDir.filePath(
                         base + "_" + hash.left(8) + QString("_thumb-%1.jpg").arg(idx, 3, 10, QLatin1Char('0')));
-
-                    int64_t frameDurationPts = 0;
-                    if (vStream->avg_frame_rate.num > 0 && vStream->avg_frame_rate.den > 0)
-                        frameDurationPts = av_rescale_q(1, av_inv_q(vStream->avg_frame_rate),
-                            vStream->time_base);
-                    else if (vStream->r_frame_rate.num > 0 && vStream->r_frame_rate.den > 0)
-                        frameDurationPts = av_rescale_q(1, av_inv_q(vStream->r_frame_rate),
-                            vStream->time_base);
-                    // fallback: assume 30 fps
-                    if (frameDurationPts == 0)
-                        frameDurationPts = av_rescale_q(1, AVRational { 1, 30 }, vStream->time_base);
-
                     if (img.save(thumbPath, "JPEG", 85)) {
-                        spdlog::debug("[Thumbnail] Successfully saved thumbnail: {}", thumbPath.toStdString());
                         results.push_back(thumbPath);
                         gotFrameForIdx = true;
-                        break;
-                    } else {
-                        spdlog::error("[Thumbnail] Failed to save image at {}",
-                            thumbPath.toStdString());
-                        // don't return, just try next probe
                     }
-                }
-
-                if (gotFrameForIdx) {
-                    break; // leave pkt-reading loop, move to next target idx
-                }
-
-                if (receiveResult < 0 && receiveResult != AVERROR(EAGAIN) && receiveResult != AVERROR_EOF) {
-                    char errBuf[AV_ERROR_MAX_STRING_SIZE] = { 0 };
-                    av_strerror(receiveResult, errBuf, sizeof(errBuf));
-                    spdlog::debug("[Thumbnail] Receive frame error: {}", errBuf);
+                    av_frame_unref(srcFrame.get());
+                    break; // first frame only
                 }
             }
+
             if (!gotFrameForIdx)
-                spdlog::warn("[Thumbnail] Unable to create thumbnail {} for '{}'", idx, filePath);
+                spdlog::warn("[Thumbnail] Could not create thumbnail {} for '{}'", idx, filePath);
         }
 
         return results.empty() ? std::nullopt

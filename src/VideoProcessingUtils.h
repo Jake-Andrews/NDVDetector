@@ -9,21 +9,19 @@
 #include <spdlog/spdlog.h>
 
 extern "C" {
-#   include <libavutil/error.h>
-#   include <libavutil/rational.h>
-#   include <libswscale/swscale.h>
-#   include <libavformat/avformat.h>
-#   include <libavcodec/avcodec.h>
-#   include <libavutil/frame.h>
-#   include <libavutil/avutil.h>
+#include <libavutil/error.h>
+#include <libavutil/rational.h>
+#include <libswscale/swscale.h>
+#include <libavformat/avformat.h>
+#include <libavcodec/avcodec.h>
+#include <libavutil/frame.h>
+#include <libavutil/avutil.h>
 }
 
-namespace vpu      // “video-processing utils”
+namespace vpu      
 {
 constexpr uint64_t PHASH_ALL_ONE_COLOUR=0x0000000000000000ULL;
-// -----------------------------------------------------------------
-// generic RAII deleter (FFmpeg opaque-ptr release helpers)
-// -----------------------------------------------------------------
+
 template<auto Fn>
 struct CDeleter {
     template<class T> void operator()(T* p) const noexcept { if (p) Fn(&p); }
@@ -47,6 +45,8 @@ inline char const* ff_err2str(int e) { return err2str(e); }
 
 inline int64_t sec_to_pts(double sec, AVRational tb)
 {
+    assert(tb.num > 0 && tb.den > 0);
+
     int64_t usec = static_cast<int64_t>(std::llrint(sec * AV_TIME_BASE));
     return av_rescale_q_rnd(usec, AV_TIME_BASE_Q, tb,
                             static_cast<AVRounding>(AV_ROUND_NEAR_INF |

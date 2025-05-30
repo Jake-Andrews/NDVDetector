@@ -52,18 +52,6 @@ MainWindow::MainWindow(DatabaseManager* db, QWidget* parent)
         QOverload<int>::of(&QComboBox::currentIndexChanged),
         ui->hashMethodStack, &QStackedWidget::setCurrentIndex);
 
-    // Radio buttons are mutually exclusive by default
-    connect(ui->tenFramesRadio, &QRadioButton::toggled, this, [this](bool checked) {
-        if (checked) {
-            ui->matchingThresholdNumSpinBoxFast->setValue(5);
-        }
-    });
-    connect(ui->twoFramesRadio, &QRadioButton::toggled, this, [this](bool checked) {
-        if (checked) {
-            ui->matchingThresholdNumSpinBoxFast->setValue(1);
-        }
-    });
-
     // -- video list view setup --
     auto* view = ui->tableView;
     view->setModel(m_model.get());
@@ -103,8 +91,8 @@ MainWindow::MainWindow(DatabaseManager* db, QWidget* parent)
             constexpr int gap = 4;
             int w = n * cell + (n - 1) * gap;
             ui->tableView->setIconSize(QSize(w, cell));
-            ui->tableView->doItemsLayout();        // recompute geometry
-            ui->tableView->resizeColumnToContents( // NEW
+            ui->tableView->doItemsLayout(); // recompute geometry
+            ui->tableView->resizeColumnToContents(
                 VideoModel::Col_Screenshot);
         });
 
@@ -398,7 +386,7 @@ SearchSettings MainWindow::collectSearchSettings() const
     s.method = fast ? HashMethod::Fast : HashMethod::Slow;
 
     if (fast) {
-        s.fastHash.maxFrames = ui->tenFramesRadio->isChecked() ? 10 : 2;
+        s.fastHash.maxFrames = ui->maxFramesSpinFast->value();
         s.fastHash.hammingDistance = ui->hammingDistanceThresholdSpinFast->value();
         s.fastHash.matchingThreshold = ui->matchingThresholdNumSpinBoxFast->value();
     } else {

@@ -263,14 +263,16 @@
                 <item row="0" column="1">
                  <layout class="QHBoxLayout">
                   <item>
-                   <widget class="QRadioButton" name="tenFramesRadio">
-                    <property name="text"><string>10 frames</string></property>
-                    <property name="checked"><bool>true</bool></property>
-                   </widget>
-                  </item>
-                  <item>
-                   <widget class="QRadioButton" name="twoFramesRadio">
-                    <property name="text"><string>2 frame</string></property>
+                   <widget class="QSpinBox" name="maxFramesSpinFast">
+                    <property name="toolTip">
+                     <string>Maximum number of frames to hash per video</string>
+                    </property>
+                    <property name="value">
+                     <number>2</number>
+                    </property>
+                    <property name="enabled">
+                      <bool>false</bool>
+                    </property>
                    </widget>
                   </item>
                  </layout>
@@ -287,14 +289,11 @@
                   <property name="toolTip">
                    <string>The minimum number of matching hashes needed to consider a video a duplicate.</string>
                   </property>
-                  <property name="minimum">
-                   <number>1</number>
-                  </property>
-                  <property name="maximum">
-                   <number>1000</number>
-                  </property>
                   <property name="value">
-                   <number>5</number>
+                   <number>2</number>
+                  </property>
+                  <property name="enabled">
+                    <bool>false</bool>
                   </property>
                  </widget>
                 </item>
@@ -310,9 +309,10 @@
                 </item>
                 <item row="2" column="1">
                  <widget class="QSpinBox" name="hammingDistanceThresholdSpinFast">
-                  <property name="minimum"><number>0</number></property>
-                  <property name="maximum"><number>64</number></property>
                   <property name="value"><number>4</number></property>
+                  <property name="enabled">
+                    <bool>false</bool>
+                  </property>
                  </widget>
                 </item>
                </layout>

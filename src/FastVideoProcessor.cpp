@@ -1,6 +1,8 @@
 // FastVideoProcessor.cpp
 #include "FastVideoProcessor.h"
 #include "Hash.h"
+#include "VideoProcessingUtils.h"
+using namespace vpu;
 
 #include <QFileInfo>
 #include <spdlog/spdlog.h>
@@ -17,9 +19,6 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
-#include "VideoProcessingUtils.h"
-using namespace vpu;
-
 #include <array>
 #include <cmath>
 #include <filesystem>
@@ -31,7 +30,60 @@ using namespace vpu;
 #include <string>
 #include <vector>
 
-static constexpr double KSAMPLEPERIODSPS = 0.2; // seconds per sample
+namespace {
+
+struct FrameRAII {
+    AVFrame* f { av_frame_alloc() };
+    FrameRAII() = default;
+    FrameRAII(FrameRAII&& o) noexcept
+        : f(o.f)
+    {
+        o.f = nullptr;
+    }
+    FrameRAII& operator=(FrameRAII&& o) noexcept
+    {
+        if (this != &o) {
+            av_frame_free(&f);
+            f = o.f;
+            o.f = nullptr;
+        }
+        return *this;
+    }
+    ~FrameRAII() { av_frame_free(&f); }
+    AVFrame* get() const noexcept { return f; }
+    void unref() const noexcept
+    {
+        if (f)
+            av_frame_unref(f);
+    }
+};
+
+// pull at most one decoded frame; return true if a frame was consumed
+template<class OnFrame>
+bool drain_decoder_once(AVCodecContext* ctx,
+    FrameRAII& frm,
+    int64_t& nextPts,
+    bool& fatal,
+    OnFrame&& onFrame)
+{
+    while (true) {
+        int r = avcodec_receive_frame(ctx, frm.get());
+        if (r == AVERROR(EAGAIN) || r == AVERROR_EOF)
+            return false;
+        if (r < 0) {
+            fatal = true;
+            frm.unref();
+            return false;
+        }
+
+        onFrame(frm.get());
+        frm.unref();
+        return true;
+    }
+}
+
+} // namespace
+
 static constexpr int KPROBESIZE = 10 * 1024 * 1024;
 static constexpr int KANALYZEUSEC = 10 * 1'000'000;
 
@@ -80,39 +132,32 @@ FastVideoProcessor::decodeAndHash(
         av_dict_free(&o);
         if (e < 0) {
             spdlog::error("[ffmpeg-sw] avformat_open_input: {}", ff_err2str(e));
-            vpu::report_progress(on_progress, 100);
             return {};
         }
         fmt.reset(raw);
     }
     if (int e = avformat_find_stream_info(fmt.get(), nullptr); e < 0) {
         spdlog::error("[ffmpeg-sw] stream_info: {}", ff_err2str(e));
-        vpu::report_progress(on_progress, 100);
         return {};
     }
 
     int vstream = av_find_best_stream(fmt.get(), AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
     if (vstream < 0) {
         spdlog::warn("[ffmpeg-sw] no video stream");
-        vpu::report_progress(on_progress, 100);
         return {};
     }
     AVStream* st = fmt->streams[vstream];
-    int64_t const step_pts = vpu::sec_to_pts(KSAMPLEPERIODSPS, st->time_base);
-    int64_t next_pts = 0; // first target (may be overwritten after seek)
 
     // --- decoder open ---
     AVCodec const* dec = avcodec_find_decoder(st->codecpar->codec_id);
     if (!dec) {
         spdlog::warn("[ffmpeg-sw] unsupported codec ID {}", static_cast<int>(st->codecpar->codec_id));
-        vpu::report_progress(on_progress, 100);
         return {};
     }
 
     CtxPtr codec_ctx { avcodec_alloc_context3(dec) };
     if (!codec_ctx || avcodec_parameters_to_context(codec_ctx.get(), st->codecpar) < 0) {
         spdlog::error("[ffmpeg-sw] avcodec_parameters_to_context failed");
-        vpu::report_progress(on_progress, 100);
         return {};
     }
 
@@ -128,205 +173,114 @@ FastVideoProcessor::decodeAndHash(
     codec_ctx->flags2 |= AV_CODEC_FLAG2_FAST;
     // Pick a sane explicit thread count (0 = FFmpeg default = may become 1)
     // For per frame decoding use 1
-    codec_ctx->thread_count = 1; // std::max(1u, std::thread::hardware_concurrency());
+    // codec_ctx->thread_count = 0;
+    unsigned tc = std::thread::hardware_concurrency();
+    codec_ctx->thread_count = tc ? tc : 1; // enforce ≥1
     spdlog::info("[sw] Using {} threads for SW decoding", codec_ctx->thread_count);
-    // codec_ctx->skip_idct = AVDISCARD_ALL;
+    codec_ctx->skip_idct = AVDISCARD_ALL;
     codec_ctx->skip_loop_filter = AVDISCARD_ALL;
 
+    spdlog::info(">>> about to open decoder");
     int err = avcodec_open2(codec_ctx.get(), dec, nullptr);
     if (err < 0) {
         spdlog::error("[ffmpeg-sw] avcodec_open2 failed: {}", ff_err2str(err));
-        report_progress(on_progress, 100);
         return {};
     }
+    spdlog::info(">>> decoder opened, err: {}", ff_err2str(err));
 
-    // --- segment-seek initialisation ---
-    // Set frames per segment based on mode (1 or 5 frames)
-    bool const oneFrameMode = cfg.fastHash.maxFrames == 2;   // 2 total frames (1 per segment)
-    bool const fiveFrameMode = cfg.fastHash.maxFrames == 10; // 10 total frames (5 per segment)
-    if (!oneFrameMode && !fiveFrameMode) {
-        throw std::runtime_error(std::format(
-            "Invalid configuration cfg.fastHash.maxFrames: '{}', must be 2 or 10",
-            cfg.fastHash.maxFrames));
-    }
-    std::size_t const kFramesPerSegment = oneFrameMode ? 1 : 5;
-    std::array<double, 2> seekPercents = { 0.30, 0.70 }; // 30%, 70%
-    std::size_t currentSegmentIdx = 0;
-    std::size_t framesInCurrentSeg = 0;
-
-    auto do_seek = [&](double pct) -> bool {
-        if (v.duration <= 0)
-            return false;
-        int64_t seekPts = sec_to_pts(pct * v.duration, st->time_base);
-        if (av_seek_frame(fmt.get(), vstream, seekPts, AVSEEK_FLAG_BACKWARD) < 0) {
-            spdlog::warn("[seek] …");
+    /* seek to an exact pts (BACKWARD to nearest key-frame) and flush codec  */
+    auto seek_to_pts = [&](int64_t pts) -> bool {
+        if (av_seek_frame(fmt.get(), vstream, pts, AVSEEK_FLAG_BACKWARD) < 0) {
+            spdlog::warn("[seek] failed to {:.1f}s", pts * av_q2d(st->time_base));
             return false;
         }
         avcodec_flush_buffers(codec_ctx.get());
-        // avformat_flush(fmt.get());
-        next_pts = seekPts;
-        spdlog::info("[seek] jumped to {:.1f}%", pct * 100);
+        avformat_flush(fmt.get());
         return true;
     };
 
-    // Initial seek to first segment
-    if (!do_seek(seekPercents[currentSegmentIdx])) { // start at 30 %
-        spdlog::error("[seek] Initial seek failed");
-        report_progress(on_progress, 100);
-        return {};
-    }
-
     // --- pre‑allocate frames/packets ---
-    FrmPtr frm { av_frame_alloc() };
+    FrameRAII frame;
     PktPtr pkt { av_packet_alloc() };
 
     std::vector<uint8_t> grayBuf; // scratch for full-res GRAY8 frames
-
-    // --- main decode / hash loop ---
-    std::vector<uint64_t> hashes;
-    hashes.reserve(cfg.fastHash.maxFrames);
 
     std::filesystem::path dumpDir;
     if constexpr (KDUMPFRAMES) {
         dumpDir = std::filesystem::path("frames") / QFileInfo(QString::fromStdString(v.path)).completeBaseName().toStdString();
         std::filesystem::create_directories(dumpDir);
     }
-    int last_progress = -1;
-    size_t frames_seen = 0;
-    bool stopped = false;
     bool fatal_error = false;
 
-    while (!fatal_error && !stopped && av_read_frame(fmt.get(), pkt.get()) >= 0) {
-        if (pkt->stream_index != vstream) {
-            av_packet_unref(pkt.get());
-            continue;
+    // --- main decode / hash loop : exactly 2 hashes ---
+    std::vector<uint64_t> hashes;
+    hashes.reserve(2);
+    std::array<double, 2> const targetsPct = { 0.30, 0.70 };
+
+    for (double pct : targetsPct) {
+        if (v.duration <= 0) {
+            fatal_error = true;
+            break;
         }
 
-        // --- send the packet — retry once on EAGAIN ---
-        bool packet_retained = true;
-        while (packet_retained) {
-            int sret = avcodec_send_packet(codec_ctx.get(), pkt.get());
-            if (sret == 0) {
+        int64_t tgtPts = sec_to_pts(pct * v.duration, st->time_base);
+        if (!seek_to_pts(tgtPts)) {
+            fatal_error = true;
+            break;
+        }
+
+        uint64_t tgtHash = 0;
+        bool gotHash = false;
+
+        while (!fatal_error && av_read_frame(fmt.get(), pkt.get()) >= 0) {
+            if (pkt->stream_index != vstream) {
                 av_packet_unref(pkt.get());
-                packet_retained = false; // ownership transferred
-            } else if (sret == AVERROR(EAGAIN)) {
-                // decoder is full → drain one batch then retry
-            } else if (sret == AVERROR_EOF) {
-                av_packet_unref(pkt.get());
-                packet_retained = false;
-                break; // codec already signalled EOF
-            } else {
-                spdlog::warn("[ffmpeg-sw] send_packet: {}", ff_err2str(sret));
+                continue;
+            }
+
+            int s;
+            while ((s = avcodec_send_packet(codec_ctx.get(), pkt.get())) == AVERROR(EAGAIN)) {
+                /* decoder full – drain to make space */
+                AVFrame* tmp = frame.get();
+                if (avcodec_receive_frame(codec_ctx.get(), tmp) >= 0)
+                    av_frame_unref(tmp);
+            }
+            if (s < 0) {
                 av_packet_unref(pkt.get());
                 fatal_error = true;
                 break;
             }
+            av_packet_unref(pkt.get());
 
-            // --- drain frames ---
-            while (true) {
-                int rret = avcodec_receive_frame(codec_ctx.get(), frm.get());
-                if (rret == AVERROR(EAGAIN))
-                    break; // need more packets
-                if (rret == AVERROR_EOF)
-                    goto decode_done; // finished
-                if (rret < 0) {
-                    spdlog::warn("[ffmpeg-sw] receive_frame: {}", ff_err2str(rret));
-                    fatal_error = true;
-                    break;
-                }
+            /* pull every available frame */
+            while (avcodec_receive_frame(codec_ctx.get(), frame.get()) >= 0) {
+                int64_t pts = (frame.get()->pts != AV_NOPTS_VALUE)
+                    ? frame.get()->pts
+                    : frame.get()->best_effort_timestamp;
 
-                int64_t frame_pts = (frm->pts != AV_NOPTS_VALUE)
-                    ? frm->pts
-                    : frm->best_effort_timestamp; // fallback
-
-                if (sample_due(frame_pts, next_pts)) {
-                    // got a frame → process
-                    ++frames_seen;
-                    if (auto hval = hash_frame(frm.get(), grayBuf, fatal_error)) {
-                        hashes.push_back(*hval);
-                        ++framesInCurrentSeg;
-                        if (framesInCurrentSeg >= kFramesPerSegment) {
-                            framesInCurrentSeg = 0;
-                            ++currentSegmentIdx;
-                            if (currentSegmentIdx < seekPercents.size()) {
-                                if (!do_seek(seekPercents[currentSegmentIdx])) { // go to 70 %
-                                    spdlog::error("[seek] Segment seek failed");
-                                    fatal_error = true;
-                                } else {
-                                    break; // successful seek, process next segment
-                                }
-                            } else {
-                                stopped = true; // all segments done
-                            }
-                            break; // leave inner frame-receive loop after seek/stop
-                        }
-                        int pct_now = int(hashes.size() * 100 / cfg.fastHash.maxFrames);
-                        if (pct_now != last_progress && pct_now <= 100) {
-                            last_progress = pct_now;
-                            report_progress(on_progress, pct_now);
-                        }
+                if (pts >= tgtPts) { // first frame after mark
+                    if (auto h = hash_frame(frame.get(), grayBuf, fatal_error)) {
+                        tgtHash = *h;
+                        gotHash = true;
                     }
-                    next_pts += step_pts; // advance to next second
+                    frame.unref();
+                    break; // stop draining
                 }
-            } // else: silently skip frame
 
-            av_frame_unref(frm.get());
-
-            if (int(hashes.size()) >= cfg.fastHash.maxFrames) {
-                stopped = true;
-                break;
+                frame.unref(); // before-mark frame – ignore
             }
-            if (sret != AVERROR(EAGAIN))
-                break; // packet fully sent or fatal — move to next packet
+            if (gotHash)
+                break; // leave av_read_frame loop
         }
+
+        if (!gotHash) { // no frame found before EOF
+            fatal_error = true;
+            break;
+        }
+
+        hashes.push_back(tgtHash);
     }
 
-decode_done:
-    // --- flush remaining ---
-    if (!fatal_error && !stopped) {
-        avcodec_send_packet(codec_ctx.get(), nullptr);
-        while (true) {
-            int rret = avcodec_receive_frame(codec_ctx.get(), frm.get());
-            if (rret == AVERROR_EOF || rret == AVERROR(EAGAIN))
-                break;
-            if (rret < 0) {
-                spdlog::warn("[ffmpeg-sw] flush receive_frame: {}", ff_err2str(rret));
-                break;
-            }
-
-            int64_t frame_pts = (frm->pts != AV_NOPTS_VALUE)
-                ? frm->pts
-                : frm->best_effort_timestamp; // fallback
-
-            if (sample_due(frame_pts, next_pts)) {
-                ++frames_seen;
-                if (auto hval = hash_frame(frm.get(), grayBuf, fatal_error)) {
-                    hashes.push_back(*hval);
-                    ++framesInCurrentSeg;
-                    if (framesInCurrentSeg >= kFramesPerSegment) {
-                        framesInCurrentSeg = 0;
-                        ++currentSegmentIdx;
-                        if (currentSegmentIdx < seekPercents.size()) {
-                            if (!do_seek(seekPercents[currentSegmentIdx])) { // go to 70 %
-                                spdlog::error("[seek] Segment seek failed");
-                                fatal_error = true;
-                            } else {
-                                break; // successful seek, process next segment
-                            }
-                        } else {
-                            stopped = true; // all segments done
-                        }
-                        break; // leave inner frame-receive loop after seek/stop
-                    }
-                }
-            }
-            next_pts += step_pts; // advance to next second
-        } // else: silently skip frame
-
-        av_frame_unref(frm.get());
-    }
-
-    spdlog::info("[sw] finished: {} frames seen, {} hashes", frames_seen, hashes.size());
-    vpu::report_progress(on_progress, 100);
+    spdlog::info("[sw] finished: {} hashes generated", hashes.size());
     return hashes;
 }

@@ -11,9 +11,9 @@ enum class HashMethod { Fast,
     Slow };
 
 struct FastHashSettings {
-    int maxFrames = 2; // 2 for 1-frame mode (1 per segment), 10 for 5-frame mode (5 per segment)
+    int maxFrames = 2; 
     int hammingDistance = 4;
-    std::uint64_t matchingThreshold = 5;
+    std::uint64_t matchingThreshold = 2;
 };
 
 struct SlowHashSettings {

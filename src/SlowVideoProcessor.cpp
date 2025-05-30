@@ -1,6 +1,8 @@
 // SlowVideoProcessor.cpp
 #include "SlowVideoProcessor.h"
 #include "Hash.h"
+#include "VideoProcessingUtils.h"
+using namespace vpu;
 
 #include <QFileInfo>
 #include <spdlog/spdlog.h>
@@ -18,38 +20,108 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
-#include "VideoProcessingUtils.h"
-using namespace vpu;
-
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <thread>
 #include <vector>
 
 namespace {
-constexpr double kSamplePeriodSec = 1.0; // 1 FPS
+constexpr double kSamplePeriodSec = 1.0;
 constexpr int kProbeSize = 10 * 1024 * 1024;
 constexpr int kAnalyzeUsec = 10 * 1'000'000;
-// constexpr int kOutW = 32;
-// constexpr int kOutH = 32;
 }
 
-// ── public API ──────────────────────────────────────────────────────────────
+// --- RAII & decoder-drain helpers ---
+namespace {
+
+struct FrameRAII {
+    AVFrame* f { av_frame_alloc() };
+    FrameRAII() = default;
+    FrameRAII(FrameRAII&& o) noexcept
+        : f(o.f)
+    {
+        o.f = nullptr;
+    }
+    FrameRAII& operator=(FrameRAII&& o) noexcept
+    {
+        if (this != &o) {
+            av_frame_free(&f);
+            f = o.f;
+            o.f = nullptr;
+        }
+        return *this;
+    }
+    ~FrameRAII() { av_frame_free(&f); }
+    AVFrame* get() const noexcept { return f; }
+    void unref() noexcept
+    {
+        if (f)
+            av_frame_unref(f);
+    }
+};
+
+// unique_ptr alias using the generic deleter from VideoProcessingUtils.h
+// using PktPtr = std::unique_ptr<AVPacket, vpu::CDeleter<&av_packet_free>>;
+
+// Pull every ready frame once; return true if a frame was consumed, false otherwise
+template<class OnHash>
+bool drain_decoder_once(AVCodecContext* ctx,
+    FrameRAII& frm,
+    int64_t ptsEnd,
+    int64_t& nextPts,
+    int64_t stepPts,
+    bool& fatal,
+    bool& done,
+    OnHash&& onHash)
+{
+    while (true) {
+        int r = avcodec_receive_frame(ctx, frm.get());
+        if (r == AVERROR(EAGAIN))
+            return false; // no frame produced
+        if (r == AVERROR_EOF)
+            return false; // fully drained
+        if (r < 0) {      // fatal error
+            fatal = true;
+            frm.unref();
+            return false;
+        }
+
+        int64_t pts = (frm.get()->pts != AV_NOPTS_VALUE)
+            ? frm.get()->pts
+            : frm.get()->best_effort_timestamp;
+
+        if (pts >= ptsEnd) {
+            frm.unref();  // avoid leak
+            done = true;  // tell caller to stop feeding
+            return false; // stop decoding
+        }
+
+        if (vpu::sample_due(pts, nextPts)) {
+            onHash(frm.get());
+            nextPts += stepPts;
+        }
+        frm.unref(); // normal case
+        return true; // consumed 1 frame
+    }
+}
+
+} // anonymous namespace
+
 std::vector<std::uint64_t>
 SlowVideoProcessor::decodeAndHash(
     VideoInfo const& info,
     SearchSettings const& cfg,
     std::function<void(int)> const& onProgress)
 {
-    // ── validation ─────────────────────────────────────────────────────────
+    // --- validation ---
     if (info.path.empty() || !std::filesystem::exists(info.path)) {
         spdlog::error("[slow] invalid path '{}'", info.path);
-        notify(onProgress, 100);
         return {};
     }
     if (cfg.slowHash.maxFrames <= 0)
@@ -61,7 +133,7 @@ SlowVideoProcessor::decodeAndHash(
     static std::once_flag ffInit;
     std::call_once(ffInit, [] { av_log_set_level(AV_LOG_WARNING); });
 
-    // ── demux – open & probe ───────────────────────────────────────────────
+    // --- demux - open & probe ---
     FmtPtr fmt;
     {
         AVDictionary* opts = nullptr;
@@ -71,7 +143,6 @@ SlowVideoProcessor::decodeAndHash(
         AVFormatContext* raw = nullptr;
         if (int e = avformat_open_input(&raw, info.path.c_str(), nullptr, &opts); e < 0) {
             spdlog::error("[ff] avformat_open_input: {}", err2str(e));
-            notify(onProgress, 100);
             av_dict_free(&opts);
             return {};
         }
@@ -79,173 +150,151 @@ SlowVideoProcessor::decodeAndHash(
         av_dict_free(&opts);
     }
 
+    // --- stream ---
     if (int e = avformat_find_stream_info(fmt.get(), nullptr); e < 0) {
         spdlog::error("[ff] stream_info: {}", err2str(e));
-        notify(onProgress, 100);
         return {};
     }
 
     int const vStream = av_find_best_stream(fmt.get(), AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
     if (vStream < 0) {
         spdlog::warn("[ff] no video stream found");
-        notify(onProgress, 100);
         return {};
     }
     AVStream* st = fmt->streams[vStream];
 
-    // ── decoder ────────────────────────────────────────────────────────────
+    // --- decoder ---
     AVCodec const* dec = avcodec_find_decoder(st->codecpar->codec_id);
     if (!dec) {
         spdlog::warn("[ff] unsupported codec {}");
-        notify(onProgress, 100);
         return {};
     }
 
     CtxPtr decCtx { avcodec_alloc_context3(dec) };
     if (!decCtx || avcodec_parameters_to_context(decCtx.get(), st->codecpar) < 0) {
         spdlog::error("[ff] parameters_to_context failed");
-        notify(onProgress, 100);
         return {};
     }
 
-    decCtx->thread_type = FF_THREAD_SLICE;
-    decCtx->thread_count = std::max(1u, std::thread::hardware_concurrency());
-    decCtx->skip_frame = AVDISCARD_DEFAULT;   // keep refs & timestamps stable
-    decCtx->skip_loop_filter = AVDISCARD_ALL; // perf – still visually fine for hashing
+    // choose best threading mode supported by this codec
+    int tt = 0;
+    if (dec->capabilities & AV_CODEC_CAP_FRAME_THREADS) // prefer frame-threads
+        tt = FF_THREAD_FRAME;
+    else if (dec->capabilities & AV_CODEC_CAP_SLICE_THREADS) // else fall back to slice-threads
+        tt = FF_THREAD_SLICE;
+    decCtx->thread_type = tt;
+    decCtx->thread_count = std::clamp<unsigned>(std::thread::hardware_concurrency(), 1, 16);
+    decCtx->skip_frame = AVDISCARD_DEFAULT;
+    // disable deblocking filter for faster decoding
+    decCtx->skip_loop_filter = AVDISCARD_ALL;
+    // disable strict compliance checks, prioritize speed
     decCtx->flags2 |= AV_CODEC_FLAG2_FAST;
 
     if (int e = avcodec_open2(decCtx.get(), dec, nullptr); e < 0) {
         spdlog::error("[ff] avcodec_open2: {}", err2str(e));
-        notify(onProgress, 100);
         return {};
     }
 
-    // ── seek setup ─────────────────────────────────────────────────────────
+    // --- seek setup ---
     int64_t const stepPts = sec_to_pts(kSamplePeriodSec, st->time_base);
     int64_t nextPts = 0;
 
+    // convert percentage to PCT and seek backwards to a keyframe
     auto performSeek = [&](double pct) {
         if (info.duration <= 0)
             return false;
-        int64_t targetPts = sec_to_pts(pct * info.duration, st->time_base);
-        if (av_seek_frame(fmt.get(), vStream, targetPts, AVSEEK_FLAG_BACKWARD) < 0)
+        nextPts = sec_to_pts(pct * info.duration, st->time_base);
+        if (av_seek_frame(fmt.get(), vStream, nextPts, AVSEEK_FLAG_BACKWARD) < 0)
             return false;
         avcodec_flush_buffers(decCtx.get());
-        // avformat_flush(fmt.get());
-        nextPts = targetPts; // capture first sample immediately
+        avformat_flush(fmt.get());
         spdlog::info("[seek] → {:.1f}%", pct * 100.0);
         return true;
     };
 
-    if (!performSeek(skipPct))
-        spdlog::info("[seek] skip disabled or failed – decoding from start");
+    if (!performSeek(skipPct)) {
+        spdlog::warn("[seek] skip disabled or failed, skipping: {}", info.path);
+        return {};
+    }
 
-    // pts at which we must stop (just before final skipPct%)
+    // pts at which we must stop to skip the last %
     int64_t const ptsEnd = needStop && info.duration > 0
         ? sec_to_pts((1.0 - skipPct) * info.duration, st->time_base)
         : INT64_MAX;
 
-    // ── buffers ────────────────────────────────────────────────────────────
+    // --- buffers ---
     std::vector<uint8_t> grayBuf; // scratch for hash_frame()
-    FrmPtr frame { av_frame_alloc() };
+    FrameRAII frame;
     PktPtr pkt { av_packet_alloc() };
-    if (!frame || !pkt) {
-        spdlog::error("[ff] allocation failure");
-        notify(onProgress, 100);
+    if (!frame.get() || !pkt) {
+        spdlog::error("[ff] allocation failure, skipping: {}", info.path);
         return {};
     }
 
     std::vector<std::uint64_t> hashes;
     hashes.reserve(cfg.slowHash.maxFrames);
 
-    // --- decoding loop ---
     bool fatal = false;
-    while (!fatal && av_read_frame(fmt.get(), pkt.get()) >= 0) {
+    bool done = false;
+
+    auto pushHash = [&](AVFrame* frm) {
+        if (auto h = hash_frame(frm, grayBuf, fatal)) {
+            hashes.push_back(*h);
+        }
+    };
+
+    auto discardHash = [](AVFrame*) { /* no-op – just drop the frame */ };
+
+    // --- decoding loop ---
+    while (!fatal && !done && av_read_frame(fmt.get(), pkt.get()) >= 0) {
         if (pkt->stream_index != vStream) {
             av_packet_unref(pkt.get());
             continue;
         }
 
-        // handle EAGAIN internally – feed packets until decoder accepts one
-        for (;;) {
+        while (!fatal) {
             int s = avcodec_send_packet(decCtx.get(), pkt.get());
             if (s == 0) {
-                av_packet_unref(pkt.get());
-            } // stole packet
-            else if (s == AVERROR(EAGAIN)) { // need to recv
-            } else if (s == AVERROR_EOF) {
-                av_packet_unref(pkt.get());
-                break;
+                av_packet_unref(pkt.get());    // pkt consumed
+            } else if (s == AVERROR(EAGAIN)) { /* need to drain first */
             } else {
-                spdlog::warn("[ff] send_packet: {}", err2str(s));
+                spdlog::warn("[ff] send_packet: {}",
+                    vpu::err2str(s));
                 fatal = true;
                 break;
             }
 
-            // pull as many frames as decoder emits
-            while (!fatal) {
-                int r = avcodec_receive_frame(decCtx.get(), frame.get());
-                if (r == AVERROR(EAGAIN))
-                    break; // need more input
-                if (r == AVERROR_EOF)
-                    goto decodeDone;
-                if (r < 0) {
-                    spdlog::warn("[ff] receive_frame: {}", err2str(r));
-                    fatal = true;
-                    break;
-                }
+            while (drain_decoder_once(decCtx.get(), frame,
+                ptsEnd, nextPts, stepPts,
+                fatal, done, pushHash)) { }
 
-                int64_t const pts = (frame->pts != AV_NOPTS_VALUE) ? frame->pts : frame->best_effort_timestamp;
-                if (pts >= ptsEnd)
-                    goto decodeDone; // passed region of interest
-                if (sample_due(pts, nextPts)) {
-                    if (auto hval = hash_frame(frame.get(), grayBuf, fatal)) {
-                        hashes.push_back(*hval);
-                        notify(onProgress,
-                            static_cast<int>(hashes.size() * 100 / cfg.slowHash.maxFrames));
-                    }
-                    nextPts += stepPts;
-                    if (hashes.size() >= static_cast<std::size_t>(cfg.slowHash.maxFrames))
-                        goto decodeDone;
-                }
-                av_frame_unref(frame.get());
-            }
+            if (hashes.size() >= std::size_t(cfg.slowHash.maxFrames))
+                done = true;
+
             if (s != AVERROR(EAGAIN))
-                break; // packet done
+                break; // packet fully accepted
+        }
+        av_packet_unref(pkt.get());
+    }
+
+    // mini-drain: empty decoder queue that already existed when we stopped
+    if (!fatal) {
+        while (drain_decoder_once(decCtx.get(), frame,
+            std::numeric_limits<int64_t>::max(), // ignore ptsEnd
+            nextPts, stepPts,
+            fatal, done, discardHash)) {
         }
     }
 
-decodeDone:
-    // ── flush remaining ────────────────────────────────────────────────────
-    if (!fatal && hashes.size() < static_cast<std::size_t>(cfg.slowHash.maxFrames)) {
+    // final flush if we still need hashes
+    if (!fatal && hashes.size() < std::size_t(cfg.slowHash.maxFrames)) {
         avcodec_send_packet(decCtx.get(), nullptr); // signal EOF
-        while (true) {
-            int r = avcodec_receive_frame(decCtx.get(), frame.get());
-            if (r == AVERROR_EOF || r == AVERROR(EAGAIN))
-                break;
-            if (r < 0) {
-                spdlog::warn("[ff] flush receive_frame: {}", err2str(r));
-                break;
-            }
-
-            int64_t const pts = (frame->pts != AV_NOPTS_VALUE) ? frame->pts : frame->best_effort_timestamp;
-            if (pts >= ptsEnd)
-                break;
-            if (sample_due(pts, nextPts)) {
-                if (auto hval = hash_frame(frame.get(), grayBuf, fatal)) {
-                    hashes.push_back(*hval);
-                    notify(onProgress,
-                        static_cast<int>(hashes.size() * 100 / cfg.slowHash.maxFrames));
-                }
-                nextPts += stepPts;
-                if (hashes.size() >= static_cast<std::size_t>(cfg.slowHash.maxFrames))
-                    break;
-            }
-            av_frame_unref(frame.get());
-        }
+        while (drain_decoder_once(decCtx.get(), frame,
+            std::numeric_limits<int64_t>::max(),
+            nextPts, stepPts,
+            fatal, done, discardHash)) { }
     }
 
     spdlog::info("[slow] done – {} hashes generated ({} requested)", hashes.size(), cfg.slowHash.maxFrames);
-    notify(onProgress, 100);
     return hashes;
 }
