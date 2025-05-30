@@ -1,9 +1,10 @@
+// SearchWorker.cpp
 #include "SearchWorker.h"
-#include "DecodingFrames.h"
 #include "DuplicateDetector.h"
 #include "FFProbeExtractor.h"
 #include "FileSystemSearch.h"
 #include "Thumbnail.h"
+#include "VideoProcessorFactory.h"
 
 #include <QDebug>
 #include <QRegularExpression>
@@ -14,12 +15,20 @@
 #include <unordered_map>
 #include <unordered_set>
 
+using enum HashMethod;
+
+/* helper ─ pick the right hash-config depending on method */
+inline auto const& activeSlow(SearchSettings const& c) { return c.slowHash; }
+inline auto const& activeFast(SearchSettings const& c) { return c.fastHash; }
+inline bool isFast(SearchSettings const& c) { return c.method == Fast; }
+
 SearchWorker::SearchWorker(DatabaseManager& db,
     SearchSettings cfg,
     QObject* parent)
     : QObject(parent)
     , m_db(db)
     , m_cfg(std::move(cfg))
+    , m_proc(makeVideoProcessor(m_cfg))
 {
 }
 
@@ -65,15 +74,24 @@ void SearchWorker::process()
         // --- Metadata, thumbnails & DB insertion ---
         doExtractionAndDetection(allVideos);
 
-        // --- Duplicate detection & persistence ---
+        // --- Get new and old hash groups and videos from the DB
         auto all = m_db.getAllVideos();
         auto hashes = m_db.getAllHashGroups();
 
+        // --- setup variables to be used depending on the hashing method chosen (fast or slow) ---
+        bool const fast = isFast(m_cfg);
+        int hamming = fast ? activeFast(m_cfg).hammingDistance
+                           : activeSlow(m_cfg).hammingDistance;
+        bool usePct = !fast && activeSlow(m_cfg).usePercentThreshold;
+        double pctThr = usePct ? activeSlow(m_cfg).matchingThresholdPct : 0.0;
+        std::uint64_t numThr = fast ? activeFast(m_cfg).matchingThreshold
+                                    : activeSlow(m_cfg).matchingThresholdNum;
+
         auto groups = findDuplicates(std::move(all), hashes,
-            m_cfg.hammingDistanceThreshold,
-            m_cfg.usePercentThreshold,
-            m_cfg.matchingThresholdPercent,
-            m_cfg.matchingThresholdNumber);
+            hamming,
+            usePct,
+            pctThr,
+            numThr);
         m_db.storeDuplicateGroups(groups);
 
         emit finished(std::move(groups));
@@ -90,6 +108,8 @@ void SearchWorker::process()
 
 void SearchWorker::doExtractionAndDetection(std::vector<VideoInfo>& videos)
 {
+    // decoding parameters are now chosen inside the strategy
+
     int metaDone = 0;
     int metaTotal = static_cast<int>(videos.size());
     emit metadataProgress(0, metaTotal);
@@ -166,12 +186,7 @@ void SearchWorker::doExtractionAndDetection(std::vector<VideoInfo>& videos)
         try {
             spdlog::info("[hash] Processing '{}'", v.path);
 
-            auto phashes = decode_and_hash(
-                v.path,
-                m_cfg.skipPercent,
-                v.duration,
-                m_cfg.maxFrames,
-                {});
+            auto phashes = m_proc->decodeAndHash(v, m_cfg, {}); // delegate
 
             if (phashes.empty()) {
                 spdlog::warn("[hash] No hashes generated for '{}'", v.path);

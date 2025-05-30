@@ -85,254 +85,363 @@
        <attribute name="title"><string>Settings</string></attribute>
        <layout class="QVBoxLayout" name="settingsLayout">
         <item>
-         <widget class="QGroupBox" name="filtersGroup">
-          <property name="title"><string>Search Filters</string></property>
-          <layout class="QFormLayout" name="filtersLayout">
-           <!-- regex help row -->
-           <item row="0" column="1">
-            <widget class="QToolButton" name="regexHelpButton">
-             <property name="text"><string>Regex ?</string></property>
-             <property name="toolTip"><string>
-              &lt;qt&gt;
-              &lt;b&gt;Regex Syntax&lt;/b&gt;&lt;br/&gt;
-              This application uses the C++ Standard Library Regular Expressions (std::regex).&lt;br/&gt;
-              The syntax is based on ECMAScript (similar to JavaScript).&lt;br/&gt;&lt;br/&gt;
-              Examples:&lt;br/&gt;
-              • ^video - matches any string that starts with "video"&lt;br/&gt;
-              • .mp4$ - matches any string ending with ".mp4"&lt;br/&gt;
-              • (dog|cat) - matches either "dog" or "cat"&lt;/qt&gt;
-              &lt;br/&gt;
-              &lt;br/&gt;
+         <widget class="QTabWidget" name="settingsOptionsTabWidget">
+          <attribute name="title">
+           <string>Settings Options</string>
+          </attribute>
+          <widget class="QWidget" name="searchSettingsTab">
+           <attribute name="title">
+            <string>Search</string>
+           </attribute>
+           <layout class="QVBoxLayout" name="searchSettingsLayout">
+            <item>
+             <widget class="QGroupBox" name="filtersGroup">
+              <layout class="QFormLayout" name="filtersLayout">
+               <!-- regex help row -->
+               <item row="0" column="1">
+                <widget class="QToolButton" name="regexHelpButton">
+                 <property name="text"><string>Regex ?</string></property>
+                 <property name="toolTip"><string>
+                  &lt;qt&gt;
+                  &lt;b&gt;Regex Syntax&lt;/b&gt;&lt;br/&gt;
+                  This application uses the C++ Standard Library Regular Expressions (std::regex).&lt;br/&gt;
+                  The syntax is based on ECMAScript (similar to JavaScript).&lt;br/&gt;&lt;br/&gt;
+                  Examples:&lt;br/&gt;
+                  • ^video - matches any string that starts with "video"&lt;br/&gt;
+                  • .mp4$ - matches any string ending with ".mp4"&lt;br/&gt;
+                  • (dog|cat) - matches either "dog" or "cat"&lt;/qt&gt;
+                  &lt;br/&gt;
+                  &lt;br/&gt;
 
-              &lt;b&gt;Glob Syntax&lt;/b&gt;&lt;br/&gt;
-              If you enable &quot;Patterns are globs&quot;, file and directory filters will use shell-style wildcards instead of regex.&lt;br/&gt;&lt;br/&gt;
-              Examples:&lt;br/&gt;
-              &amp;bull; &lt;code&gt;*.mp4&lt;/code&gt; – matches all files ending in &quot;.mp4&quot;&lt;br/&gt;
-              &amp;bull; &lt;code&gt;video*&lt;/code&gt; – matches files that start with &quot;video&quot;&lt;br/&gt;
-              &amp;bull; &lt;code&gt;*dog*.*&lt;/code&gt; – matches anything with &quot;dog&quot; in the name&lt;br/&gt;&lt;br/&gt;
+                  &lt;b&gt;Glob Syntax&lt;/b&gt;&lt;br/&gt;
+                  If you enable &quot;Patterns are globs&quot;, file and directory filters will use shell-style wildcards instead of regex.&lt;br/&gt;&lt;br/&gt;
+                  Examples:&lt;br/&gt;
+                  &amp;bull; &lt;code&gt;*.mp4&lt;/code&gt; – matches all files ending in &quot;.mp4&quot;&lt;br/&gt;
+                  &amp;bull; &lt;code&gt;video*&lt;/code&gt; – matches files that start with &quot;video&quot;&lt;br/&gt;
+                  &amp;bull; &lt;code&gt;*dog*.*&lt;/code&gt; – matches anything with &quot;dog&quot; in the name&lt;br/&gt;&lt;br/&gt;
 
-              &lt;qt&gt;
-              &lt;b&gt;If any include filter is defined:&lt;/b&gt;&lt;br/&gt;
-              &amp;bull; Only include files that match an include regex.&lt;br/&gt;
-              &amp;bull; Exclude filters are ignored.&lt;br/&gt;&lt;br/&gt;
-              &lt;b&gt;If no include filters are defined:&lt;/b&gt;&lt;br/&gt;
-              &amp;bull; Match everything except what's excluded.
-              &lt;/qt&gt;
+                  &lt;qt&gt;
+                  &lt;b&gt;If any include filter is defined:&lt;/b&gt;&lt;br/&gt;
+                  &amp;bull; Only include files that match an include regex.&lt;br/&gt;
+                  &amp;bull; Exclude filters are ignored.&lt;br/&gt;&lt;br/&gt;
+                  &lt;b&gt;If no include filters are defined:&lt;/b&gt;&lt;br/&gt;
+                  &amp;bull; Match everything except what's excluded.
+                  &lt;/qt&gt;
 
-             </string></property>
-             <property name="autoRaise"><bool>true</bool></property>
-            </widget>
-           </item>
-           <item row="1" column="0">
-            <widget class="QLabel" name="includeFileLabel">
-             <property name="text"><string>Include File Regex (one per line)</string></property>
-            </widget>
-           </item>
-           <item row="1" column="1">
-            <widget class="QPlainTextEdit" name="includeFileEdit"/>
-           </item>
-           <item row="2" column="0">
-            <widget class="QLabel" name="includeDirLabel">
-             <property name="text"><string>Include Dir Regex</string></property>
-            </widget>
-           </item>
-           <item row="2" column="1">
-            <widget class="QPlainTextEdit" name="includeDirEdit"/>
-           </item>
-           <item row="3" column="0">
-            <widget class="QLabel" name="excludeFileLabel">
-             <property name="text"><string>Exclude File Regex</string></property>
-            </widget>
-           </item>
-           <item row="3" column="1">
-            <widget class="QPlainTextEdit" name="excludeFileEdit"/>
-           </item>
-           <item row="4" column="0">
-            <widget class="QLabel" name="excludeDirLabel">
-             <property name="text"><string>Exclude Dir Regex</string></property>
-            </widget>
-           </item>
-           <item row="4" column="1">
-            <widget class="QPlainTextEdit" name="excludeDirEdit"/>
-           </item>
-           <item row="5" column="0">
-            <widget class="QLabel" name="minBytesLabel">
-             <property name="text"><string>Min Bytes (0 = none)</string></property>
-            </widget>
-           </item>
-           <item row="5" column="1">
-            <widget class="QDoubleSpinBox" name="minBytesSpin">
-             <property name="maximum"><double>100000.0</double></property>
-             <property name="suffix"><string> MB</string></property>
-            </widget>
-           </item>
-           <item row="6" column="0">
-            <widget class="QLabel" name="maxBytesLabel">
-             <property name="text"><string>Max Bytes (0 = none)</string></property>
-            </widget>
-           </item>
-           <item row="6" column="1">
-            <widget class="QDoubleSpinBox" name="maxBytesSpin">
-             <property name="maximum"><double>100000.0</double></property>
-             <property name="suffix"><string> MB</string></property>
-            </widget>
-           </item>
-           <item row="7" column="0">
-            <widget class="QLabel" name="extLabel">
-             <property name="text"><string>Extensions (comma-separated, “.mp4,.mkv” … empty = all)</string></property>
-            </widget>
-           </item>
-           <item row="7" column="1">
-            <widget class="QLineEdit" name="extensionsEdit"/>
-           </item>
-           <item row="8" column="0">
-            <widget class="QCheckBox" name="globCheckBox">
-             <property name="text"><string>Patterns are globs</string></property>
-            </widget>
-           </item>
-           <item row="8" column="1">
-            <widget class="QCheckBox" name="caseCheckBox">
-             <property name="text"><string>Case-insensitive</string></property>
-            </widget>
-           </item>
-           <item row="9" column="1">
-            <widget class="QPushButton" name="validatePatternsButton">
-             <property name="text"><string>Validate patterns…</string></property>
-            </widget>
-           </item>
-           <item row="10" column="1">
-            <widget class="QPushButton" name="regexTesterButton">
-             <property name="text"><string>Sandbox to test patterns…</string></property>
-            </widget>
-           </item>
-           <item row="11" column="0">
-            <widget class="QLabel" name="thumbsLabel">
-              <property name="text">
-                <string>Thumbnails per video (1-4)</string>
-              </property>
-            </widget>
-           </item>
-           <item row="11" column="1">
-            <widget class="QSpinBox" name="thumbnailsSpin">
-              <property name="minimum"><number>1</number></property>
-              <property name="maximum"><number>4</number></property>
-              <property name="value"><number>4</number></property>
-            </widget>
-           </item>
-           <item row="12" column="0">
-            <widget class="QLabel" name="skipLabel">
-              <property name="text">
-                <string>Skip percent (0-40%)</string>
-              </property>
-            </widget>
-           </item>
-           <item row="12" column="1">
-            <widget class="QSpinBox" name="skipSpin">
-              <property name="minimum"><number>0</number></property>
-              <property name="maximum"><number>40</number></property>
-              <property name="value"><number>15</number></property>
-            </widget>
-           </item>
-           <item row="13" column="0">
-            <widget class="QLabel" name="maxFramesLabel">
-              <property name="text">
-                <string>Maximum number of frames to hash per video</string>
-              </property>
-            </widget>
-           </item>
-           <item row="13" column="1">
-            <widget class="QSpinBox" name="maxFramesSpin">
-              <property name="minimum"><number>10</number></property>
-              <property name="maximum"><number>2147483647</number></property>
-              <property name="value"><number>2147483647</number></property>
-            </widget>
-           </item>
-           <item row="14" column="0">
-            <widget class="QRadioButton" name="fixedNumThresholdRadio">
-             <property name="text">
-              <string>Match threshold (number):</string>
-             </property>
-             <property name="checked">
-              <bool>true</bool> </property>
-            </widget>
-           </item>
-           <item row="14" column="1">
-            <widget class="QSpinBox" name="matchingThresholdNumSpinBox">
-             <property name="toolTip">
-              <string>The minimum number of matching hashes needed to consider a video a duplicate.</string>
-             </property>
-             <property name="minimum">
-              <number>1</number>
-             </property>
-             <property name="maximum">
-              <number>1000</number> </property>
-             <property name="value">
-              <number>5</number> </property>
-            </widget>
-           </item>
-
-           <item row="15" column="0">
-            <widget class="QRadioButton" name="percentThresholdRadio">
-             <property name="text">
-              <string>Match threshold (percent):</string>
-             </property>
-             <property name="checked">
-              <bool>false</bool>
-             </property>
-            </widget>
-           </item>
-           <item row="15" column="1">
-            <layout class="QHBoxLayout" name="horizontalLayout_matchPercent">
-             <item>
-              <widget class="QDoubleSpinBox" name="matchingThresholdPercentSpinBox">
-               <property name="enabled">
-                <bool>false</bool> </property>
-               <property name="toolTip">
-                <string>The minimum percentage of matching hashes needed to consider a video a duplicate as a percent of the longer videos duration.</string>
-               </property>
-               <property name="minimum">
-                <double>1.0</double>
-               </property>
-               <property name="maximum">
-                <double>100.0</double>
-               </property>
-               <property name="singleStep">
-                <double>1.0</double>
-               </property>
-               <property name="value">
-                <double>50.0</double> </property>
-               <property name="decimals">
-                <number>1</number>
-               </property>
+                 </string></property>
+                 <property name="autoRaise"><bool>true</bool></property>
+                </widget>
+               </item>
+               <item row="1" column="0">
+                <widget class="QLabel" name="includeFileLabel">
+                 <property name="text"><string>Include File Regex (one per line)</string></property>
+                </widget>
+               </item>
+               <item row="1" column="1">
+                <widget class="QPlainTextEdit" name="includeFileEdit"/>
+               </item>
+               <item row="2" column="0">
+                <widget class="QLabel" name="includeDirLabel">
+                 <property name="text"><string>Include Dir Regex</string></property>
+                </widget>
+               </item>
+               <item row="2" column="1">
+                <widget class="QPlainTextEdit" name="includeDirEdit"/>
+               </item>
+               <item row="3" column="0">
+                <widget class="QLabel" name="excludeFileLabel">
+                 <property name="text"><string>Exclude File Regex</string></property>
+                </widget>
+               </item>
+               <item row="3" column="1">
+                <widget class="QPlainTextEdit" name="excludeFileEdit"/>
+               </item>
+               <item row="4" column="0">
+                <widget class="QLabel" name="excludeDirLabel">
+                 <property name="text"><string>Exclude Dir Regex</string></property>
+                </widget>
+               </item>
+               <item row="4" column="1">
+                <widget class="QPlainTextEdit" name="excludeDirEdit"/>
+               </item>
+               <item row="5" column="0">
+                <widget class="QLabel" name="minBytesLabel">
+                 <property name="text"><string>Min Bytes (0 = none)</string></property>
+                </widget>
+               </item>
+               <item row="5" column="1">
+                <widget class="QDoubleSpinBox" name="minBytesSpin">
+                 <property name="maximum"><double>100000.0</double></property>
+                 <property name="suffix"><string> MB</string></property>
+                </widget>
+               </item>
+               <item row="6" column="0">
+                <widget class="QLabel" name="maxBytesLabel">
+                 <property name="text"><string>Max Bytes (0 = none)</string></property>
+                </widget>
+               </item>
+               <item row="6" column="1">
+                <widget class="QDoubleSpinBox" name="maxBytesSpin">
+                 <property name="maximum"><double>100000.0</double></property>
+                 <property name="suffix"><string> MB</string></property>
+                </widget>
+               </item>
+               <item row="7" column="0">
+                <widget class="QLabel" name="extLabel">
+                 <property name="text"><string>Extensions (comma-separated, “.mp4,.mkv” … empty = all)</string></property>
+                </widget>
+               </item>
+               <item row="7" column="1">
+                <widget class="QLineEdit" name="extensionsEdit"/>
+               </item>
+               <item row="8" column="0">
+                <widget class="QCheckBox" name="globCheckBox">
+                 <property name="text"><string>Patterns are globs</string></property>
+                </widget>
+               </item>
+               <item row="8" column="1">
+                <widget class="QCheckBox" name="caseCheckBox">
+                 <property name="text"><string>Case-insensitive</string></property>
+                </widget>
+               </item>
+               <item row="9" column="1">
+                <widget class="QPushButton" name="validatePatternsButton">
+                 <property name="text"><string>Validate patterns…</string></property>
+                </widget>
+               </item>
+               <item row="10" column="1">
+                <widget class="QPushButton" name="regexTesterButton">
+                 <property name="text"><string>Sandbox to test patterns…</string></property>
+                </widget>
+               </item>
+               <item row="11" column="0">
+                <widget class="QLabel" name="thumbsLabel">
+                  <property name="text">
+                    <string>Thumbnails per video (1-4)</string>
+                  </property>
+                </widget>
+               </item>
+               <item row="11" column="1">
+                <widget class="QSpinBox" name="thumbnailsSpin">
+                  <property name="minimum"><number>1</number></property>
+                  <property name="maximum"><number>4</number></property>
+                  <property name="value"><number>4</number></property>
+                </widget>
+               </item>
+              </layout>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+          <widget class="QWidget" name="hashingSettingsTab">
+           <attribute name="title">
+            <string>Hashing</string>
+           </attribute>
+           <layout class="QFormLayout" name="hashingLayout">
+            <item row="0" column="0">
+             <widget class="QLabel" name="hashMethodLabel">
+              <property name="text"><string>Hash method</string></property>
+             </widget>
+            </item>
+            <item row="0" column="1">
+             <widget class="QComboBox" name="hashMethodCombo">
+              <item><property name="text"><string>Fast</string></property></item>
+              <item><property name="text"><string>Slow</string></property></item>
+             </widget>
+            </item>
+            <item row="1" column="0" colspan="2">
+             <widget class="QStackedWidget" name="hashMethodStack">
+              <widget class="QWidget" name="fastTab">
+               <layout class="QFormLayout" name="fastTabLayout">
+                <item row="0" column="0">
+                 <widget class="QLabel" name="maxFramesLabelFast">
+                  <property name="text">
+                   <string>Maximum number of frames to hash per video</string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="0" column="1">
+                 <layout class="QHBoxLayout">
+                  <item>
+                   <widget class="QRadioButton" name="tenFramesRadio">
+                    <property name="text"><string>10 frames</string></property>
+                    <property name="checked"><bool>true</bool></property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QRadioButton" name="twoFramesRadio">
+                    <property name="text"><string>2 frame</string></property>
+                   </widget>
+                  </item>
+                 </layout>
+                </item>
+                <item row="1" column="0">
+                 <widget class="QLabel" name="fixedNumThresholdLabelFast">
+                  <property name="text">
+                   <string>Match threshold (number):</string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="1" column="1">
+                 <widget class="QSpinBox" name="matchingThresholdNumSpinBoxFast">
+                  <property name="toolTip">
+                   <string>The minimum number of matching hashes needed to consider a video a duplicate.</string>
+                  </property>
+                  <property name="minimum">
+                   <number>1</number>
+                  </property>
+                  <property name="maximum">
+                   <number>1000</number>
+                  </property>
+                  <property name="value">
+                   <number>5</number>
+                  </property>
+                 </widget>
+                </item>
+                <item row="2" column="0">
+                 <widget class="QLabel" name="hammingDistanceThresholdLabelFast">
+                  <property name="toolTip">
+                   <string>The maximum Hamming distance allowed between two hashes to consider them a match.</string>
+                  </property>
+                  <property name="text">
+                   <string>Hamming distance threshold (1-64) </string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="2" column="1">
+                 <widget class="QSpinBox" name="hammingDistanceThresholdSpinFast">
+                  <property name="minimum"><number>0</number></property>
+                  <property name="maximum"><number>64</number></property>
+                  <property name="value"><number>4</number></property>
+                 </widget>
+                </item>
+               </layout>
               </widget>
-             </item>
-             <item>
-              <widget class="QLabel" name="percentSymbolLabel">
-               <property name="text">
-                <string>%</string>
-               </property>
+              <widget class="QWidget" name="slowTab">
+               <layout class="QFormLayout" name="slowTabLayout">
+                <item row="0" column="0">
+                 <widget class="QLabel" name="skipLabel">
+                  <property name="text">
+                   <string>Skip percent (0-40%)</string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="0" column="1">
+                 <widget class="QSpinBox" name="skipSpin">
+                  <property name="minimum"><number>0</number></property>
+                  <property name="maximum"><number>40</number></property>
+                  <property name="value"><number>15</number></property>
+                 </widget>
+                </item>
+                <item row="1" column="0">
+                 <widget class="QLabel" name="maxFramesLabel">
+                  <property name="text">
+                   <string>Maximum number of frames to hash per video</string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="1" column="1">
+                 <widget class="QSpinBox" name="maxFramesSpin">
+                  <property name="minimum"><number>10</number></property>
+                  <property name="maximum"><number>2147483647</number></property>
+                  <property name="value"><number>2147483647</number></property>
+                 </widget>
+                </item>
+                <item row="2" column="0">
+                 <widget class="QRadioButton" name="fixedNumThresholdRadio">
+                  <property name="text">
+                   <string>Match threshold (number):</string>
+                  </property>
+                  <property name="checked">
+                   <bool>true</bool>
+                  </property>
+                 </widget>
+                </item>
+                <item row="2" column="1">
+                 <widget class="QSpinBox" name="matchingThresholdNumSpinBox">
+                  <property name="toolTip">
+                   <string>The minimum number of matching hashes needed to consider a video a duplicate.</string>
+                  </property>
+                  <property name="minimum">
+                   <number>1</number>
+                  </property>
+                  <property name="maximum">
+                   <number>1000</number>
+                  </property>
+                  <property name="value">
+                   <number>5</number>
+                  </property>
+                 </widget>
+                </item>
+                <item row="3" column="0">
+                 <widget class="QRadioButton" name="percentThresholdRadio">
+                  <property name="text">
+                   <string>Match threshold (percent):</string>
+                  </property>
+                  <property name="checked">
+                   <bool>false</bool>
+                  </property>
+                 </widget>
+                </item>
+                <item row="3" column="1">
+                 <layout class="QHBoxLayout" name="horizontalLayout_matchPercent">
+                  <item>
+                   <widget class="QDoubleSpinBox" name="matchingThresholdPercentSpinBox">
+                    <property name="enabled">
+                     <bool>false</bool>
+                    </property>
+                    <property name="toolTip">
+                     <string>The minimum percentage of matching hashes needed to consider a video a duplicate as a percent of the longer videos duration.</string>
+                    </property>
+                    <property name="minimum">
+                     <double>1.0</double>
+                    </property>
+                    <property name="maximum">
+                     <double>100.0</double>
+                    </property>
+                    <property name="singleStep">
+                     <double>1.0</double>
+                    </property>
+                    <property name="value">
+                     <double>50.0</double>
+                    </property>
+                    <property name="decimals">
+                     <number>1</number>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QLabel" name="percentSymbolLabel">
+                    <property name="text">
+                     <string>%</string>
+                    </property>
+                   </widget>
+                  </item>
+                 </layout>
+                </item>
+                <item row="4" column="0">
+                 <widget class="QLabel" name="hammingDistanceThresholdLabel">
+                  <property name="toolTip">
+                   <string>The maximum Hamming distance allowed between two hashes to consider them a match.</string>
+                  </property>
+                  <property name="text">
+                   <string>Hamming distance threshold (1-64) </string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="4" column="1">
+                 <widget class="QSpinBox" name="hammingDistanceThresholdSpin">
+                  <property name="minimum"><number>0</number></property>
+                  <property name="maximum"><number>64</number></property>
+                  <property name="value"><number>4</number></property>
+                 </widget>
+                </item>
+               </layout>
               </widget>
-             </item>
-            </layout>
-           </item>
-           <item row="16" column="0">
-            <widget class="QLabel" name="hammingDistanceThresholdLabel">
-               <property name="toolTip">
-                <string>The maximum Hamming distance allowed between two hashes to consider them a match.</string>
-               </property>
-              <property name="text">
-                <string>Hamming distance threshold (1-64) </string>
-              </property>
-            </widget>
-           </item>
-           <item row="16" column="1">
-            <widget class="QSpinBox" name="hammingDistanceThresholdSpin">
-              <property name="minimum"><number>0</number></property>
-              <property name="maximum"><number>64</number></property>
-              <property name="value"><number>4</number></property>
-            </widget>
-           </item>
-          </layout>
+             </widget>
+            </item>
+           </layout>
+          </widget>
          </widget>
         </item>
         <item>

@@ -1,3 +1,4 @@
+// VideoModel.cpp
 #include "VideoModel.h"
 #include <QColor>
 #include <QDebug>

@@ -1,0 +1,11 @@
+#pragma once
+#include "IVideoProcessor.h"
+
+class FastVideoProcessor : public IVideoProcessor {
+public:
+    std::vector<std::uint64_t>
+    decodeAndHash(
+    VideoInfo const& v,
+    SearchSettings const& cfg,
+    std::function<void(int)> const& on_progress);
+};

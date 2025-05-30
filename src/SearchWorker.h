@@ -3,6 +3,8 @@
 #include "DatabaseManager.h"
 #include "VideoInfo.h"
 #include "SearchSettings.h"
+#include <memory>
+#include "IVideoProcessor.h"
 #include <QObject>
 #include <QString>
 #include <vector>
@@ -23,7 +25,8 @@ signals:
 
 private:
     DatabaseManager& m_db;
-    SearchSettings m_cfg; 
+    SearchSettings   m_cfg;
+    std::unique_ptr<IVideoProcessor> m_proc;   // strategy
 
     void doExtractionAndDetection(std::vector<VideoInfo>& videos);
 };

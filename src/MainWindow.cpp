@@ -35,18 +35,34 @@ MainWindow::MainWindow(DatabaseManager* db, QWidget* parent)
 {
     ui->setupUi(this);
 
-    // --- matching-threshold radio buttons ---
-    auto updateThresholdWidgets = [this](bool numMode) {
+    // --- matching-threshold radio buttons (slow tab only) ---
+    auto updateThresholdWidgetsSlow = [this](bool numMode) {
         ui->matchingThresholdNumSpinBox->setEnabled(numMode);
         ui->matchingThresholdPercentSpinBox->setEnabled(!numMode);
     };
     connect(ui->fixedNumThresholdRadio, &QRadioButton::toggled,
-        this, updateThresholdWidgets);
+        this, updateThresholdWidgetsSlow);
     connect(ui->percentThresholdRadio, &QRadioButton::toggled,
-        this, [updateThresholdWidgets](bool on) { updateThresholdWidgets(!on); });
+        this, [updateThresholdWidgetsSlow](bool on) { updateThresholdWidgetsSlow(!on); });
 
     // force correct initial state
-    updateThresholdWidgets(ui->fixedNumThresholdRadio->isChecked());
+    updateThresholdWidgetsSlow(ui->fixedNumThresholdRadio->isChecked());
+
+    connect(ui->hashMethodCombo,
+        QOverload<int>::of(&QComboBox::currentIndexChanged),
+        ui->hashMethodStack, &QStackedWidget::setCurrentIndex);
+
+    // Radio buttons are mutually exclusive by default
+    connect(ui->tenFramesRadio, &QRadioButton::toggled, this, [this](bool checked) {
+        if (checked) {
+            ui->matchingThresholdNumSpinBoxFast->setValue(5);
+        }
+    });
+    connect(ui->twoFramesRadio, &QRadioButton::toggled, this, [this](bool checked) {
+        if (checked) {
+            ui->matchingThresholdNumSpinBoxFast->setValue(1);
+        }
+    });
 
     // -- video list view setup --
     auto* view = ui->tableView;
@@ -376,8 +392,26 @@ SearchSettings MainWindow::collectSearchSettings() const
 
     // --- FFmpeg decoding ---
     s.thumbnailsPerVideo = std::clamp(ui->thumbnailsSpin->value(), 1, 4);
-    s.skipPercent = ui->skipSpin->value();
-    s.maxFrames = ui->maxFramesSpin->value();
+
+    // --- Fast / Slow selection ---
+    bool fast = ui->hashMethodCombo->currentIndex() == 0;
+    s.method = fast ? HashMethod::Fast : HashMethod::Slow;
+
+    if (fast) {
+        s.fastHash.maxFrames = ui->tenFramesRadio->isChecked() ? 10 : 2;
+        s.fastHash.hammingDistance = ui->hammingDistanceThresholdSpinFast->value();
+        s.fastHash.matchingThreshold = ui->matchingThresholdNumSpinBoxFast->value();
+    } else {
+        s.slowHash.maxFrames = ui->maxFramesSpin->value();
+        s.slowHash.skipPercent = ui->skipSpin->value();
+        s.slowHash.maxFrames = ui->maxFramesSpin->value();
+        s.slowHash.hammingDistance = ui->hammingDistanceThresholdSpin->value();
+        s.slowHash.usePercentThreshold = ui->percentThresholdRadio->isChecked();
+        if (s.slowHash.usePercentThreshold)
+            s.slowHash.matchingThresholdPct = ui->matchingThresholdPercentSpinBox->value();
+        else
+            s.slowHash.matchingThresholdNum = ui->matchingThresholdNumSpinBox->value();
+    }
 
     compileAllRegexes(s);
 
