@@ -22,7 +22,6 @@ extern "C" {
 #include <array>
 #include <cmath>
 #include <filesystem>
-#include <fstream>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -88,6 +87,7 @@ static constexpr int KPROBESIZE = 10 * 1024 * 1024;
 static constexpr int KANALYZEUSEC = 10 * 1'000'000;
 
 // saves frames to fs for debugging
+/*
 static constexpr bool KDUMPFRAMES = false;
 static void write_pgm(std::filesystem::path const& path,
     uint8_t const* data, int w, int h, int stride)
@@ -100,6 +100,7 @@ static void write_pgm(std::filesystem::path const& path,
     for (int y = 0; y < h; ++y)
         os.write(reinterpret_cast<char const*>(data + y * stride), w);
 }
+*/
 
 std::vector<std::uint64_t>
 FastVideoProcessor::decodeAndHash(
@@ -205,11 +206,13 @@ FastVideoProcessor::decodeAndHash(
 
     std::vector<uint8_t> grayBuf; // scratch for full-res GRAY8 frames
 
+    /*
     std::filesystem::path dumpDir;
     if constexpr (KDUMPFRAMES) {
         dumpDir = std::filesystem::path("frames") / QFileInfo(QString::fromStdString(v.path)).completeBaseName().toStdString();
         std::filesystem::create_directories(dumpDir);
     }
+    */
     bool fatal_error = false;
 
     // --- main decode / hash loop : exactly 2 hashes ---

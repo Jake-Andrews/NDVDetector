@@ -117,7 +117,6 @@ static void build_table(int src, int dst, Weights& tab)
         double s = (d + 0.5) * scale - 0.5;
         int i0 = static_cast<int>(std::floor(s));
         double f = s - i0;
-        int i1 = std::min(i0 + 1, src - 1);
 
         i0 = std::clamp(i0, 0, src - 1);
         tab.idx[d] = i0;
@@ -130,8 +129,8 @@ static void build_table(int src, int dst, Weights& tab)
 static void hpass(float const* src, int srcW, int srcH, int srcStride,
     float* tmp, Weights const& wx)
 {
-    constexpr int W = 32;
 #if defined(__AVX2__)
+    constexpr int W = 32;
     for (int y = 0; y < srcH; ++y) {
         float const* row = src + y * srcStride;
         float* out = tmp + y * W;
@@ -165,8 +164,8 @@ static void hpass(float const* src, int srcW, int srcH, int srcStride,
 // Vertical pass: tmp (srcH × 32) → dst32 (32 × 32)
 static void vpass(float const* tmp, int srcH, float* dst, Weights const& wy)
 {
-    constexpr int W = 32;
 #if defined(__AVX2__)
+    constexpr int W = 32;
     for (int d = 0; d < W; ++d) {
         float const* col = tmp + d;
         float* out = dst + d;
