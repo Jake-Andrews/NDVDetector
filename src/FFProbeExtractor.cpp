@@ -2,7 +2,6 @@
 
 #include <QString>
 #include <filesystem>
-#include <iostream>
 #include <libavcodec/defs.h>
 #include <optional>
 #include <spdlog/spdlog.h>
@@ -26,7 +25,7 @@ open_format_context(std::string const& file_path)
 {
     AVFormatContext* ctx = nullptr;
     if (avformat_open_input(&ctx, file_path.c_str(), nullptr, nullptr) != 0) {
-        std::cerr << "[FFmpeg] Error: Failed to open file: " << file_path << '\n';
+        spdlog::error("[FFprobe] Error: Failed to open file: {}", file_path);
         return std::nullopt;
     }
     return std::unique_ptr<AVFormatContext, decltype(&free_format_context)>(ctx, free_format_context);
@@ -37,38 +36,37 @@ bool extract_info(VideoInfo& out)
     spdlog::debug("Extracting info for path: {}", out.path);
 
     if (!std::filesystem::exists(out.path)) {
-        spdlog::error("[FFmpeg] File does not exist: {}", out.path);
+        spdlog::error("[FFprobe] File does not exist: {}", out.path);
         return false;
     }
 
     auto formatCtxOpt = open_format_context(out.path);
     if (!formatCtxOpt) {
-        spdlog::error("[FFmpeg] Failed to open format context for: {}", out.path);
+        spdlog::error("[FFprobe] Failed to open format context for: {}", out.path);
         return false;
     }
 
     if (avformat_find_stream_info(formatCtxOpt->get(), nullptr) < 0) {
-        spdlog::error("[FFmpeg] Failed to find stream info for: {}", out.path);
+        spdlog::error("[FFprobe] Failed to find stream info for: {}", out.path);
         return false;
     }
 
     if (formatCtxOpt->get()->duration <= 0) {
-        spdlog::error("[FFmpeg] Invalid or missing duration for file: {}", out.path);
+        spdlog::error("[FFprobe] Invalid or missing duration for file: {}", out.path);
         return false;
     }
 
-    //  Basic container‑level properties ------------------------------------------------
     out.duration = static_cast<int>(formatCtxOpt->get()->duration / AV_TIME_BASE);
     out.size = static_cast<int64_t>(std::filesystem::file_size(out.path));
     out.bit_rate = static_cast<int>(formatCtxOpt->get()->bit_rate);
 
     bool has_video_stream = false;
 
-    //  Iterate through all streams ------------------------------------------------------
+    // Iterate through all streams
     for (unsigned i = 0; i < formatCtxOpt->get()->nb_streams; ++i) {
         AVStream* stream = formatCtxOpt->get()->streams[i];
         if (!stream || !stream->codecpar) {
-            spdlog::warn("[FFmpeg] Skipping invalid stream {} in file: {}", i, out.path);
+            spdlog::warn("[FFprobe] Skipping invalid stream {} in file: {}", i, out.path);
             continue;
         }
 
@@ -83,8 +81,7 @@ bool extract_info(VideoInfo& out)
             out.width = params->width;
             out.height = params->height;
 
-            // ---------------------- NEW: pix_fmt / profile / level ----------------------
-            // Pixel‑format (e.g. "yuv420p10le")
+            // --- pix_fmt / profile / level ---
             if (params->format != AV_PIX_FMT_NONE) {
                 char const* name = av_get_pix_fmt_name(static_cast<AVPixelFormat>(params->format));
                 out.pix_fmt = name ? name : "unknown";
@@ -103,7 +100,6 @@ bool extract_info(VideoInfo& out)
             // Codec level (raw integer, e.g. 40 => 4.0)
             out.level = params->level; // 0 if unspecified
 
-            // Average frame‑rate ---------------------------------------------------------
             AVRational r = stream->avg_frame_rate;
             out.avg_frame_rate = r.den > 0 ? static_cast<double>(r.num) / r.den : 0.0;
 
@@ -114,67 +110,9 @@ bool extract_info(VideoInfo& out)
     }
 
     if (!has_video_stream || out.width <= 0 || out.height <= 0) {
-        spdlog::error("[FFmpeg] No valid video stream in file: {}", out.path);
+        spdlog::error("[FFprobe] No valid video stream in file: {}", out.path);
         return false;
     }
 
     return true;
-}
-
-std::optional<std::tuple<QString, QString, QString, int>>
-probe_video_codec_info(QString const& qpath)
-{
-    std::string path = qpath.toStdString();
-
-    if (!std::filesystem::exists(path)) {
-        spdlog::error("[FFmpeg] File does not exist: {}", path);
-        return std::nullopt;
-    }
-
-    auto formatCtxOpt = open_format_context(path);
-    if (!formatCtxOpt) {
-        spdlog::error("[FFmpeg] Failed to open format context for: {}", path);
-        return std::nullopt;
-    }
-
-    if (avformat_find_stream_info(formatCtxOpt->get(), nullptr) < 0) {
-        spdlog::error("[FFmpeg] Failed to find stream info for: {}", path);
-        return std::nullopt;
-    }
-
-    for (unsigned i = 0; i < formatCtxOpt->get()->nb_streams; ++i) {
-        AVStream* stream = formatCtxOpt->get()->streams[i];
-        if (!stream || !stream->codecpar)
-            continue;
-
-        AVCodecParameters* params = stream->codecpar;
-        if (params->codec_type != AVMEDIA_TYPE_VIDEO)
-            continue;
-
-        AVCodec const* codec = avcodec_find_decoder(params->codec_id);
-        QString codecName = codec ? codec->name : "unknown";
-
-        QString pixFmt = "unknown";
-        if (params->format != AV_PIX_FMT_NONE) {
-            char const* name = av_get_pix_fmt_name(static_cast<AVPixelFormat>(params->format));
-            if (name)
-                pixFmt = name;
-        }
-
-        QString profile = "unknown";
-        if (params->profile != AV_PROFILE_UNKNOWN && codec) {
-            char const* pname = avcodec_profile_name(codec->id, params->profile);
-            if (pname)
-                profile = pname;
-            else
-                profile = QString::number(params->profile);
-        }
-
-        int level = params->level;
-
-        return std::make_tuple(codecName, pixFmt, profile, level);
-    }
-
-    spdlog::error("[FFmpeg] No video stream found in file: {}", path);
-    return std::nullopt;
 }
