@@ -71,36 +71,35 @@ std::optional<int> DatabaseManager::insertVideo(VideoInfo& video)
 {
     static constexpr auto sql = R"(
         INSERT INTO video (
-            path, created_at, modified_at,
+            path, modified_at,
             video_codec, audio_codec, pix_fmt, profile, level, width, height,
             duration, size, bit_rate, num_hard_links,
             inode, device, sample_rate_avg, avg_frame_rate, thumbnail_path
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
     )";
 
     try {
         auto stmt = prepareStatement(m_db, sql);
         checkRc(sqlite3_bind_text(stmt.get(), 1, video.path.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind path");
-        checkRc(sqlite3_bind_text(stmt.get(), 2, video.created_at.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind created_at");
-        checkRc(sqlite3_bind_text(stmt.get(), 3, video.modified_at.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind modified_at");
-        checkRc(sqlite3_bind_text(stmt.get(), 4, video.video_codec.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind video_codec");
-        checkRc(sqlite3_bind_text(stmt.get(), 5, video.audio_codec.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind audio_codec");
-        checkRc(sqlite3_bind_text(stmt.get(), 6, video.pix_fmt.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind pix_fmt");
-        checkRc(sqlite3_bind_text(stmt.get(), 7, video.profile.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind profile");
-        checkRc(sqlite3_bind_int(stmt.get(), 8, video.level), m_db, "bind level");
-        checkRc(sqlite3_bind_int(stmt.get(), 9, video.width), m_db, "bind width");
-        checkRc(sqlite3_bind_int(stmt.get(), 10, video.height), m_db, "bind height");
-        checkRc(sqlite3_bind_int(stmt.get(), 11, video.duration), m_db, "bind duration");
-        checkRc(sqlite3_bind_int(stmt.get(), 12, video.size), m_db, "bind size");
-        checkRc(sqlite3_bind_int(stmt.get(), 13, video.bit_rate), m_db, "bind bit_rate");
-        checkRc(sqlite3_bind_int(stmt.get(), 14, video.num_hard_links), m_db, "bind num_hard_links");
-        checkRc(sqlite3_bind_int64(stmt.get(), 15, static_cast<sqlite3_int64>(video.inode)), m_db, "bind inode");
-        checkRc(sqlite3_bind_int64(stmt.get(), 16, static_cast<sqlite3_int64>(video.device)), m_db, "bind device");
-        checkRc(sqlite3_bind_int(stmt.get(), 17, video.sample_rate_avg), m_db, "bind sample_rate_avg");
-        checkRc(sqlite3_bind_double(stmt.get(), 18, video.avg_frame_rate), m_db, "bind avg_frame_rate");
+        checkRc(sqlite3_bind_text(stmt.get(), 2, video.modified_at.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind modified_at");
+        checkRc(sqlite3_bind_text(stmt.get(), 3, video.video_codec.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind video_codec");
+        checkRc(sqlite3_bind_text(stmt.get(), 4, video.audio_codec.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind audio_codec");
+        checkRc(sqlite3_bind_text(stmt.get(), 5, video.pix_fmt.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind pix_fmt");
+        checkRc(sqlite3_bind_text(stmt.get(), 6, video.profile.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind profile");
+        checkRc(sqlite3_bind_int(stmt.get(), 7, video.level), m_db, "bind level");
+        checkRc(sqlite3_bind_int(stmt.get(), 8, video.width), m_db, "bind width");
+        checkRc(sqlite3_bind_int(stmt.get(), 9, video.height), m_db, "bind height");
+        checkRc(sqlite3_bind_int(stmt.get(), 10, video.duration), m_db, "bind duration");
+        checkRc(sqlite3_bind_int(stmt.get(), 11, video.size), m_db, "bind size");
+        checkRc(sqlite3_bind_int(stmt.get(), 12, video.bit_rate), m_db, "bind bit_rate");
+        checkRc(sqlite3_bind_int(stmt.get(), 13, video.num_hard_links), m_db, "bind num_hard_links");
+        checkRc(sqlite3_bind_int64(stmt.get(), 14, static_cast<sqlite3_int64>(video.inode)), m_db, "bind inode");
+        checkRc(sqlite3_bind_int64(stmt.get(), 15, static_cast<sqlite3_int64>(video.device)), m_db, "bind device");
+        checkRc(sqlite3_bind_int(stmt.get(), 16, video.sample_rate_avg), m_db, "bind sample_rate_avg");
+        checkRc(sqlite3_bind_double(stmt.get(), 17, video.avg_frame_rate), m_db, "bind avg_frame_rate");
         {
             std::string thumbsJson = nlohmann::json(video.thumbnail_path).dump();
-            checkRc(sqlite3_bind_text(stmt.get(), 19, thumbsJson.c_str(),
+            checkRc(sqlite3_bind_text(stmt.get(), 18, thumbsJson.c_str(),
                         -1, SQLITE_TRANSIENT),
                 m_db, "bind thumbnail_path");
         }
@@ -145,7 +144,7 @@ bool DatabaseManager::insertAllHashes(int video_id, std::vector<uint64_t> const&
 std::vector<VideoInfo> DatabaseManager::getAllVideos() const
 {
     static constexpr auto sql = R"(
-        SELECT id, path, created_at, modified_at,
+        SELECT id, path, modified_at,
                video_codec, audio_codec, pix_fmt, profile, level, width, height,
                duration, size, bit_rate, num_hard_links,
                inode, device, sample_rate_avg, avg_frame_rate, thumbnail_path
@@ -162,24 +161,23 @@ std::vector<VideoInfo> DatabaseManager::getAllVideos() const
                 VideoInfo v;
                 v.id = sqlite3_column_int(stmt.get(), 0);
                 v.path = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 1));
-                v.created_at = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 2));
-                v.modified_at = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 3));
-                v.video_codec = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 4));
-                v.audio_codec = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 5));
-                v.pix_fmt = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 6));
-                v.profile = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 7));
-                v.level = sqlite3_column_int(stmt.get(), 8);
-                v.width = sqlite3_column_int(stmt.get(), 9);
-                v.height = sqlite3_column_int(stmt.get(), 10);
-                v.duration = sqlite3_column_int(stmt.get(), 11);
-                v.size = sqlite3_column_int(stmt.get(), 12);
-                v.bit_rate = sqlite3_column_int(stmt.get(), 13);
-                v.num_hard_links = sqlite3_column_int(stmt.get(), 14);
-                v.inode = static_cast<long>(sqlite3_column_int64(stmt.get(), 15));
-                v.device = static_cast<long>(sqlite3_column_int64(stmt.get(), 16));
-                v.sample_rate_avg = sqlite3_column_int(stmt.get(), 17);
-                v.avg_frame_rate = sqlite3_column_double(stmt.get(), 18);
-                if (auto* t = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 19)); t) {
+                v.modified_at = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 2));
+                v.video_codec = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 3));
+                v.audio_codec = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 4));
+                v.pix_fmt = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 5));
+                v.profile = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 6));
+                v.level = sqlite3_column_int(stmt.get(), 7);
+                v.width = sqlite3_column_int(stmt.get(), 8);
+                v.height = sqlite3_column_int(stmt.get(), 9);
+                v.duration = sqlite3_column_int(stmt.get(), 10);
+                v.size = sqlite3_column_int(stmt.get(), 11);
+                v.bit_rate = sqlite3_column_int(stmt.get(), 12);
+                v.num_hard_links = sqlite3_column_int(stmt.get(), 13);
+                v.inode = static_cast<long>(sqlite3_column_int64(stmt.get(), 14));
+                v.device = static_cast<long>(sqlite3_column_int64(stmt.get(), 15));
+                v.sample_rate_avg = sqlite3_column_int(stmt.get(), 16);
+                v.avg_frame_rate = sqlite3_column_double(stmt.get(), 17);
+                if (auto* t = reinterpret_cast<char const*>(sqlite3_column_text(stmt.get(), 18)); t) {
                     try {
                         auto j = nlohmann::json::parse(t);
                         if (j.is_array())
@@ -259,7 +257,6 @@ void DatabaseManager::copyMetadataExceptPath(int targetId, int destinationId)
 {
     static constexpr auto sql = R"(
         UPDATE video SET
-            created_at     = (SELECT created_at FROM video WHERE id = ?),
             modified_at    = (SELECT modified_at FROM video WHERE id = ?),
             video_codec    = (SELECT video_codec FROM video WHERE id = ?),
             audio_codec    = (SELECT audio_codec FROM video WHERE id = ?),
@@ -282,10 +279,10 @@ void DatabaseManager::copyMetadataExceptPath(int targetId, int destinationId)
 
     try {
         auto stmt = prepareStatement(m_db, sql);
-        for (int i = 1; i <= 18; ++i) {
+        for (int i = 1; i <= 17; ++i) {
             checkRc(sqlite3_bind_int(stmt.get(), i, targetId), m_db, "bind metadata field");
         }
-        checkRc(sqlite3_bind_int(stmt.get(), 19, destinationId), m_db, "bind destinationId");
+        checkRc(sqlite3_bind_int(stmt.get(), 18, destinationId), m_db, "bind destinationId");
         checkRc(sqlite3_step(stmt.get()), m_db, "execute copyMetadataExceptPath");
     } catch (std::exception const& ex) {
         spdlog::error("copyMetadataExceptPath failed: {}", ex.what());
@@ -314,7 +311,6 @@ void DatabaseManager::updateVideoInfo(VideoInfo const& v)
     static constexpr auto sql = R"(
         UPDATE video SET
             path             = ?,
-            created_at       = ?,
             modified_at      = ?,
             video_codec      = ?,
             audio_codec      = ?,
@@ -337,30 +333,29 @@ void DatabaseManager::updateVideoInfo(VideoInfo const& v)
     try {
         auto stmt = prepareStatement(m_db, sql);
         checkRc(sqlite3_bind_text(stmt.get(), 1, v.path.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind path");
-        checkRc(sqlite3_bind_text(stmt.get(), 2, v.created_at.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind created_at");
-        checkRc(sqlite3_bind_text(stmt.get(), 3, v.modified_at.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind modified_at");
-        checkRc(sqlite3_bind_text(stmt.get(), 4, v.video_codec.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind video_codec");
-        checkRc(sqlite3_bind_text(stmt.get(), 5, v.audio_codec.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind audio_codec");
-        checkRc(sqlite3_bind_text(stmt.get(), 6, v.pix_fmt.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind pix_fmt");
-        checkRc(sqlite3_bind_text(stmt.get(), 7, v.profile.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind profile");
-        checkRc(sqlite3_bind_int(stmt.get(), 8, v.level), m_db, "bind level");
-        checkRc(sqlite3_bind_int(stmt.get(), 9, v.width), m_db, "bind width");
-        checkRc(sqlite3_bind_int(stmt.get(), 10, v.height), m_db, "bind height");
-        checkRc(sqlite3_bind_int(stmt.get(), 11, v.duration), m_db, "bind duration");
-        checkRc(sqlite3_bind_int(stmt.get(), 12, v.size), m_db, "bind size");
-        checkRc(sqlite3_bind_int(stmt.get(), 13, v.bit_rate), m_db, "bind bit_rate");
-        checkRc(sqlite3_bind_int(stmt.get(), 14, v.num_hard_links), m_db, "bind num_hard_links");
-        checkRc(sqlite3_bind_int64(stmt.get(), 15, static_cast<sqlite3_int64>(v.inode)), m_db, "bind inode");
-        checkRc(sqlite3_bind_int64(stmt.get(), 16, static_cast<sqlite3_int64>(v.device)), m_db, "bind device");
-        checkRc(sqlite3_bind_int(stmt.get(), 17, v.sample_rate_avg), m_db, "bind sample_rate_avg");
-        checkRc(sqlite3_bind_double(stmt.get(), 18, v.avg_frame_rate), m_db, "bind avg_frame_rate");
+        checkRc(sqlite3_bind_text(stmt.get(), 2, v.modified_at.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind modified_at");
+        checkRc(sqlite3_bind_text(stmt.get(), 3, v.video_codec.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind video_codec");
+        checkRc(sqlite3_bind_text(stmt.get(), 4, v.audio_codec.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind audio_codec");
+        checkRc(sqlite3_bind_text(stmt.get(), 5, v.pix_fmt.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind pix_fmt");
+        checkRc(sqlite3_bind_text(stmt.get(), 6, v.profile.c_str(), -1, SQLITE_TRANSIENT), m_db, "bind profile");
+        checkRc(sqlite3_bind_int(stmt.get(), 7, v.level), m_db, "bind level");
+        checkRc(sqlite3_bind_int(stmt.get(), 8, v.width), m_db, "bind width");
+        checkRc(sqlite3_bind_int(stmt.get(), 9, v.height), m_db, "bind height");
+        checkRc(sqlite3_bind_int(stmt.get(), 10, v.duration), m_db, "bind duration");
+        checkRc(sqlite3_bind_int(stmt.get(), 11, v.size), m_db, "bind size");
+        checkRc(sqlite3_bind_int(stmt.get(), 12, v.bit_rate), m_db, "bind bit_rate");
+        checkRc(sqlite3_bind_int(stmt.get(), 13, v.num_hard_links), m_db, "bind num_hard_links");
+        checkRc(sqlite3_bind_int64(stmt.get(), 14, static_cast<sqlite3_int64>(v.inode)), m_db, "bind inode");
+        checkRc(sqlite3_bind_int64(stmt.get(), 15, static_cast<sqlite3_int64>(v.device)), m_db, "bind device");
+        checkRc(sqlite3_bind_int(stmt.get(), 16, v.sample_rate_avg), m_db, "bind sample_rate_avg");
+        checkRc(sqlite3_bind_double(stmt.get(), 17, v.avg_frame_rate), m_db, "bind avg_frame_rate");
         {
             std::string thumbsJson = nlohmann::json(v.thumbnail_path).dump();
-            checkRc(sqlite3_bind_text(stmt.get(), 19, thumbsJson.c_str(),
+            checkRc(sqlite3_bind_text(stmt.get(), 18, thumbsJson.c_str(),
                         -1, SQLITE_TRANSIENT),
                 m_db, "bind thumbnail_path");
         }
-        checkRc(sqlite3_bind_int(stmt.get(), 20, v.id), m_db, "bind id");
+        checkRc(sqlite3_bind_int(stmt.get(), 19, v.id), m_db, "bind id");
         checkRc(sqlite3_step(stmt.get()), m_db, "execute updateVideoInfo");
     } catch (std::exception const& ex) {
         spdlog::error("updateVideoInfo failed: {}", ex.what());
@@ -471,7 +466,6 @@ void DatabaseManager::initDatabase()
         CREATE TABLE IF NOT EXISTS video (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             path TEXT NOT NULL,
-            created_at DATETIME,
             modified_at DATETIME,
             video_codec TEXT,
             audio_codec TEXT,

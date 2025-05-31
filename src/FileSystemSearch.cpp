@@ -22,27 +22,50 @@
 namespace {
 
 #ifdef _WIN32
-bool get_file_identity(const std::filesystem::path& path, long& inode, long& device, int& nlinks)
+bool get_file_identity(const std::filesystem::path& path, long& inode, long& device, int& nlinks, std::string& modified_at)
 {
-    HANDLE hFile = CreateFileW(path.c_str(), 0, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-        FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    HANDLE hFile = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+        nullptr);
     if (hFile == INVALID_HANDLE_VALUE)
         return false;
 
     BY_HANDLE_FILE_INFORMATION fileInfo;
     bool success = GetFileInformationByHandle(hFile, &fileInfo);
-    CloseHandle(hFile);
-
-    if (!success)
+    if (!success) {
+        CloseHandle(hFile);
         return false;
+    }
 
     inode = (static_cast<uint64_t>(fileInfo.nFileIndexHigh) << 32) | fileInfo.nFileIndexLow;
     device = static_cast<long>(fileInfo.dwVolumeSerialNumber);
     nlinks = static_cast<int>(fileInfo.nNumberOfLinks);
+
+    // Convert last write time (modification time) to SYSTEMTIME
+    FILETIME localFileTime;
+    if (!FileTimeToLocalFileTime(&fileInfo.ftLastWriteTime, &localFileTime)) {
+        CloseHandle(hFile);
+        return false;
+    }
+
+    SYSTEMTIME systemTime;
+    if (!FileTimeToSystemTime(&localFileTime, &systemTime)) {
+        CloseHandle(hFile);
+        return false;
+    }
+
+    // Format SYSTEMTIME to string
+    char buffer[20]; // "YYYY-MM-DD HH:MM:SS" + null terminator
+    std::snprintf(buffer, sizeof(buffer), "%04d-%02d-%02d %02d:%02d:%02d",
+        systemTime.wYear, systemTime.wMonth, systemTime.wDay,
+        systemTime.wHour, systemTime.wMinute, systemTime.wSecond);
+
+    modified_at = buffer;
+
+    CloseHandle(hFile);
     return true;
 }
 #elif defined(__unix__)
-bool get_file_identity(const std::filesystem::path& path, long& inode, long& device, int& nlinks)
+bool get_file_identity(const std::filesystem::path& path, long& inode, long& device, int& nlinks, std::string& modified_at)
 {
     struct stat st;
     if (stat(path.c_str(), &st) != 0)
@@ -51,6 +74,16 @@ bool get_file_identity(const std::filesystem::path& path, long& inode, long& dev
     inode = static_cast<long>(st.st_ino);
     device = static_cast<long>(st.st_dev);
     nlinks = static_cast<int>(st.st_nlink);
+
+    std::time_t mtime = st.st_mtime;
+
+    // not thread safe
+    std::tm* tm = std::localtime(&mtime);
+
+    std::ostringstream oss;
+    oss << std::put_time(tm, "%Y-%m-%d %H:%M:%S");
+    modified_at = oss.str();
+
     return true;
 }
 #else
@@ -69,6 +102,12 @@ static bool matchAny(std::string const& text,
         [&](auto const& rx) { return std::regex_search(text, rx); });
 }
 
+// VideoInfo fields set:
+//   path
+//   size
+//   inode
+//   device
+//   num_hard_links
 std::vector<VideoInfo>
 getVideosFromPath(std::filesystem::path const& root, SearchSettings const& cfg)
 {
@@ -80,7 +119,7 @@ getVideosFromPath(std::filesystem::path const& root, SearchSettings const& cfg)
         return out;
     }
 
-    // Log effective search filters
+    // Log search filters
     spdlog::info("Searching path: {}", root.string());
     spdlog::info("  Recursive: {}", std::ranges::any_of(cfg.directories, [&](auto const& d) {
         return d.path == root.lexically_normal().string() && d.recursive;
@@ -111,7 +150,6 @@ getVideosFromPath(std::filesystem::path const& root, SearchSettings const& cfg)
     spdlog::info("  MinBytes: {}", cfg.minBytes ? std::to_string(*cfg.minBytes) : "None");
     spdlog::info("  MaxBytes: {}", cfg.maxBytes ? std::to_string(*cfg.maxBytes) : "None");
 
-    // Determine if this root path is marked recursive
     bool recurse = true;
     for (auto const& d : cfg.directories) {
         if (d.path == root.lexically_normal().string()) {
@@ -179,33 +217,11 @@ getVideosFromPath(std::filesystem::path const& root, SearchSettings const& cfg)
             return;
 
         video.path = absPath.lexically_normal().string();
-
-        std::error_code timeErr;
-        auto ftime = std::filesystem::last_write_time(absPath, timeErr);
-        if (!timeErr) {
-            auto fileTimePoint = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-                ftime - decltype(ftime)::clock::now() + std::chrono::system_clock::now());
-            std::time_t sctp = std::chrono::system_clock::to_time_t(fileTimePoint);
-            video.modified_at = std::to_string(sctp);
-        } else {
-            video.modified_at = "";
-        }
-
-        video.created_at = "";
         video.size = static_cast<int>(sz);
-        video.video_codec.clear();
-        video.audio_codec.clear();
-        video.width = 0;
-        video.height = 0;
-        video.duration = 0;
-        video.bit_rate = 0;
-        video.sample_rate_avg = 0;
-        video.avg_frame_rate = 0.0;
 
-        if (!get_file_identity(absPath, video.inode, video.device, video.num_hard_links)) {
-            video.inode = -1;
-            video.device = -1;
-            video.num_hard_links = 1;
+        if (!get_file_identity(absPath, video.inode, video.device, video.num_hard_links, video.modified_at)) {
+            spdlog::debug("Failed to get file identify, rejecting: {}", path.string());
+            return;
         }
 
         spdlog::debug("Accepted: {}", video.path);

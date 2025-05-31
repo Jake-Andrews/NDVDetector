@@ -72,8 +72,6 @@ private:
     void deleteFromDisk();
 
     void sortBySize();
-    void sortByCreatedAt();
     void sortGroupsBySize();
-    void sortGroupsByCreatedAt();
 };
 

@@ -18,7 +18,6 @@ HardlinkWorker::HardlinkWorker(DatabaseManager& db,
 
 static void copyFieldsExceptPath(VideoInfo& dst, VideoInfo const& src)
 {
-    dst.created_at = src.created_at;
     dst.modified_at = src.modified_at;
     dst.video_codec = src.video_codec;
     dst.audio_codec = src.audio_codec;

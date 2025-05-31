@@ -165,8 +165,6 @@ void VideoController::handleSortOption(MainWindow::SortOptions option, bool asce
 
     if (option == MainWindow::SortOptions::Size)
         m_model->sortVideosWithinGroupsBySize(ascending);
-    else if (option == MainWindow::SortOptions::CreatedAt)
-        m_model->sortVideosWithinGroupsByCreatedAt(ascending);
 }
 
 void VideoController::handleSortGroupsOption(MainWindow::SortOptions option, bool ascending)
@@ -176,8 +174,6 @@ void VideoController::handleSortGroupsOption(MainWindow::SortOptions option, boo
 
     if (option == MainWindow::SortOptions::Size)
         m_model->sortGroupsBySize(ascending);
-    else if (option == MainWindow::SortOptions::CreatedAt)
-        m_model->sortGroupsByCreatedAt(ascending);
 }
 
 void VideoController::handleDeleteOption(MainWindow::DeleteOptions option)

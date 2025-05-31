@@ -17,7 +17,7 @@
 
 using enum HashMethod;
 
-/* helper ─ pick the right hash-config depending on method */
+// helper ─ pick the right hash-config depending on method chosen
 inline auto const& activeSlow(SearchSettings const& c) { return c.slowHash; }
 inline auto const& activeFast(SearchSettings const& c) { return c.fastHash; }
 inline bool isFast(SearchSettings const& c) { return c.method == Fast; }
@@ -34,7 +34,6 @@ SearchWorker::SearchWorker(DatabaseManager& db,
 
 void SearchWorker::process()
 {
-    // Lift global log-level if the caller hasn’t done so already
     spdlog::set_level(spdlog::level::debug);
 
     emit searchProgress(0);
@@ -42,7 +41,7 @@ void SearchWorker::process()
     try {
         spdlog::info("[worker] Starting search task");
 
-        // --- Enumerate video files ---
+        // --- Gather video files and basic video information through syscalls  ---
         std::vector<VideoInfo> allVideos;
 
         for (auto const& dir : m_cfg.directories) {
@@ -61,24 +60,32 @@ void SearchWorker::process()
             }
         }
 
-        // --- Filter videos already known to the DB ---
+        spdlog::info("[worker] found {} videos", allVideos.size());
+
+        // --- Filter videos already known to the DB (equal paths) ---
         std::unordered_set<std::string> known;
         auto dbVideos = m_db.getAllVideos();
         known.reserve(dbVideos.size());
         for (auto const& dv : dbVideos)
             known.insert(dv.path);
 
+        auto prev_size = allVideos.size();
         std::erase_if(allVideos, [&](VideoInfo const& v) { return known.contains(v.path); });
+        spdlog::info("[worker] {} videos already found in the DB", prev_size - allVideos.size());
         spdlog::info("[worker] {} new videos to process", allVideos.size());
 
-        // --- Metadata, thumbnails & DB insertion ---
-        doExtractionAndDetection(allVideos);
+        // --- Generate metadata and thumbnails and DB insertion ---
+        spdlog::info("[worker] Generating video metadata and thumbnails");
+        generateMetadataAndThumbnails(allVideos);
 
-        // --- Get new and old hash groups and videos from the DB
+        // --- pHash extraction & DB insertion ---
+        decodeAndHashVideos(allVideos);
+
+        // --- Get new and old hash groups and videos from the DB ---
         auto all = m_db.getAllVideos();
         auto hashes = m_db.getAllHashGroups();
 
-        // --- setup variables to be used depending on the hashing method chosen (fast or slow) ---
+        // --- Setup variables to be used depending on the hashing method chosen (fast or slow) ---
         bool const fast = isFast(m_cfg);
         int hamming = fast ? activeFast(m_cfg).hammingDistance
                            : activeSlow(m_cfg).hammingDistance;
@@ -87,6 +94,7 @@ void SearchWorker::process()
         std::uint64_t numThr = fast ? activeFast(m_cfg).matchingThreshold
                                     : activeSlow(m_cfg).matchingThresholdNum;
 
+        // --- Compare video's pHashes to detect duplicates ---
         auto groups = findDuplicates(std::move(all), hashes,
             hamming,
             usePct,
@@ -106,19 +114,18 @@ void SearchWorker::process()
     }
 }
 
-void SearchWorker::doExtractionAndDetection(std::vector<VideoInfo>& videos)
+void SearchWorker::generateMetadataAndThumbnails(std::vector<VideoInfo>& videos)
 {
-    // decoding parameters are now chosen inside the strategy
-
     int metaDone = 0;
     int metaTotal = static_cast<int>(videos.size());
     emit metadataProgress(0, metaTotal);
 
-    // --- metadata / thumbnail / initial DB insert ---
     spdlog::info("Thumbnail/FFprobe started");
 
     std::vector<VideoInfo> filtered;
-    std::vector<std::future<std::pair<std::string, std::vector<QString>>>> thumbTasks;
+    std::vector<std::future<std::pair<std::string,
+        std::vector<QString>>>>
+        thumbTasks;
 
     filtered.reserve(videos.size());
     thumbTasks.reserve(videos.size());
@@ -126,31 +133,27 @@ void SearchWorker::doExtractionAndDetection(std::vector<VideoInfo>& videos)
     for (auto& v : videos) {
 
         if (!extract_info(v)) {
-            spdlog::warn("[meta] Failed FFprobe extraction – skipping '{}'", v.path);
+            spdlog::warn("[FFprobe] Failed extraction, skipping '{}'", v.path);
             ++metaDone;
             emit metadataProgress(metaDone, metaTotal);
             continue;
         }
 
-        ++metaDone;
-        emit metadataProgress(metaDone, metaTotal);
-
-        // copy for the worker thread
-        VideoInfo vCopy = v;
+        VideoInfo vCopy = v; // copy for async task
         thumbTasks.emplace_back(std::async(std::launch::async,
-            [vid = std::move(vCopy),
-                nThumbs = m_cfg.thumbnailsPerVideo]() mutable
-                -> std::pair<std::string, std::vector<QString>> {
+            [vid = std::move(vCopy), nThumbs = m_cfg.thumbnailsPerVideo]() mutable -> std::pair<std::string, std::vector<QString>> {
                 auto opt = extract_color_thumbnails(vid, nThumbs);
                 return { vid.path, opt ? *opt : std::vector<QString> {} };
             }));
         filtered.push_back(std::move(v));
+
+        ++metaDone;
+        emit metadataProgress(metaDone, metaTotal);
     }
 
     std::unordered_map<std::string, std::vector<QString>> thumbMap;
     for (auto& fut : thumbTasks) {
-        // blocks only for unfinished tasks
-        auto [path, qthumbs] = fut.get();
+        auto [path, qthumbs] = fut.get(); // blocks only if needed
         thumbMap.emplace(std::move(path), std::move(qthumbs));
     }
 
@@ -161,27 +164,26 @@ void SearchWorker::doExtractionAndDetection(std::vector<VideoInfo>& videos)
             for (auto const& q : it->second)
                 v.thumbnail_path.push_back(q.toStdString());
         }
-        // universal fallback
         if (v.thumbnail_path.empty())
             v.thumbnail_path.emplace_back("./sneed.png");
 
-        // DB work kept serial
         if (auto id = m_db.insertVideo(v))
             v.id = *id;
         else
             spdlog::error("[DB] Inserting metadata failed for '{}'", v.path);
     }
-    // preserve original contract
     videos.swap(filtered);
-
     spdlog::info("Thumbnail/FFprobe finished");
+}
+
+void SearchWorker::decodeAndHashVideos(std::vector<VideoInfo>& videos)
+{
     spdlog::info("Hashing started");
 
     int hashedCount = 0;
     int totalToHash = static_cast<int>(videos.size());
     emit hashProgress(0, totalToHash);
 
-    // --- pHash extraction & DB insertion ---
     for (auto const& v : videos) {
         try {
             spdlog::info("[hash] Processing '{}'", v.path);
@@ -198,9 +200,11 @@ void SearchWorker::doExtractionAndDetection(std::vector<VideoInfo>& videos)
                     phashes.size(), v.path);
             }
         } catch (std::exception const& ex) {
-            spdlog::error("[worker] Exception while processing '{}': {}", v.path, ex.what());
+            spdlog::error("[worker] Exception while processing '{}': {}",
+                v.path, ex.what());
         } catch (...) {
-            spdlog::error("[worker] Unknown exception while processing '{}'", v.path);
+            spdlog::error("[worker] Unknown exception while processing '{}'",
+                v.path);
         }
 
         ++hashedCount;

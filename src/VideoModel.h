@@ -52,10 +52,8 @@ public:
     void removeVideosFromModel(std::vector<int> const& videoIds);
 
     void sortVideosWithinGroupsBySize(bool ascending);
-    void sortVideosWithinGroupsByCreatedAt(bool ascending);
 
     void sortGroupsBySize(bool ascending);
-    void sortGroupsByCreatedAt(bool ascending);
 
     void selectRow(int row);
 

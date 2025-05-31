@@ -31,6 +31,19 @@ open_format_context(std::string const& file_path)
     return std::unique_ptr<AVFormatContext, decltype(&free_format_context)>(ctx, free_format_context);
 }
 
+// VideoInfo fields set:
+//   modified_at
+//   video_codec
+//   audio_codec
+//   pix_fmt
+//   profile
+//   level
+//   width
+//   height
+//   duration
+//   bit_rate
+//   sample_rate_avg
+//   avg_frame_rate
 bool extract_info(VideoInfo& out)
 {
     spdlog::debug("Extracting info for path: {}", out.path);
@@ -57,7 +70,6 @@ bool extract_info(VideoInfo& out)
     }
 
     out.duration = static_cast<int>(formatCtxOpt->get()->duration / AV_TIME_BASE);
-    out.size = static_cast<int64_t>(std::filesystem::file_size(out.path));
     out.bit_rate = static_cast<int>(formatCtxOpt->get()->bit_rate);
 
     bool has_video_stream = false;

@@ -30,7 +30,7 @@ public:
     Q_ENUM(DeleteOptions)
     enum SelectOptions { AllExceptLargest, AllExceptSmallest, Smallest, Largest };
     Q_ENUM(SelectOptions)
-    enum SortOptions { Size, CreatedAt };
+    enum SortOptions { Size };
     Q_ENUM(SortOptions)
 
 signals:                     

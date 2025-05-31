@@ -29,5 +29,7 @@ private:
     std::unique_ptr<IVideoProcessor> m_proc;   // strategy
 
     void doExtractionAndDetection(std::vector<VideoInfo>& videos);
+    void generateMetadataAndThumbnails(std::vector<VideoInfo>& videos);
+    void decodeAndHashVideos(std::vector<VideoInfo>& videos);
 };
 

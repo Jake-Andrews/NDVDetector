@@ -420,25 +420,6 @@ void VideoModel::sortVideosWithinGroupsBySize(bool ascending)
     setGroupedVideos(groups);
 }
 
-static int64_t safeStoll(std::string const& str)
-{
-    return std::stoll(str.empty() ? "0" : str);
-}
-
-void VideoModel::sortVideosWithinGroupsByCreatedAt(bool ascending)
-{
-    auto groups = toGroups();
-    for (auto& g : groups) {
-        std::sort(g.begin(), g.end(),
-            [ascending](auto const& a, auto const& b) {
-                auto atA = safeStoll(a.created_at);
-                auto atB = safeStoll(b.created_at);
-                return ascending ? atA < atB : atA > atB;
-            });
-    }
-    setGroupedVideos(groups);
-}
-
 void VideoModel::sortGroupsBySize(bool ascending)
 {
     auto groups = toGroups();
@@ -449,31 +430,6 @@ void VideoModel::sortGroupsBySize(bool ascending)
             auto sum2 = std::accumulate(g2.begin(), g2.end(), int64_t { 0 },
                 [](int64_t s, auto const& v) { return s + v.size; });
             return ascending ? sum1 < sum2 : sum1 > sum2;
-        });
-    setGroupedVideos(groups);
-}
-
-void VideoModel::sortGroupsByCreatedAt(bool ascending)
-{
-    auto groups = toGroups();
-    std::sort(groups.begin(), groups.end(),
-        [ascending](auto const& g1, auto const& g2) {
-            if (g1.empty())
-                return true;
-            if (g2.empty())
-                return false;
-
-            auto valA = std::stoll(std::min_element(g1.begin(), g1.end(),
-                [](auto const& a, auto const& b) {
-                    return std::stoll(a.created_at.empty() ? "0" : a.created_at) < std::stoll(b.created_at.empty() ? "0" : b.created_at);
-                })->created_at);
-
-            auto valB = std::stoll(std::min_element(g2.begin(), g2.end(),
-                [](auto const& a, auto const& b) {
-                    return std::stoll(a.created_at.empty() ? "0" : a.created_at) < std::stoll(b.created_at.empty() ? "0" : b.created_at);
-                })->created_at);
-
-            return ascending ? valA < valB : valA > valB;
         });
     setGroupedVideos(groups);
 }

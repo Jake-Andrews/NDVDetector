@@ -190,30 +190,24 @@ void MainWindow::onSortClicked()
 {
     QMenu m(this);
     QAction* aSize = m.addAction(tr("Sort By Size"));
-    QAction* aDate = m.addAction(tr("Sort By CreatedAt"));
     QAction* selected = m.exec(QCursor::pos());
     if (!selected)
         return;
 
     if (selected == aSize)
         emit sortOptionChosen(Size);
-    else if (selected == aDate)
-        emit sortOptionChosen(CreatedAt);
 }
 
 void MainWindow::onSortGroupsClicked()
 {
     QMenu m(this);
     QAction* aSize = m.addAction(tr("Sort Groups By Size"));
-    QAction* aDate = m.addAction(tr("Sort Groups By CreatedAt"));
     QAction* selected = m.exec(QCursor::pos());
     if (!selected)
         return;
 
     if (selected == aSize)
         emit sortGroupsOptionChosen(Size);
-    else if (selected == aDate)
-        emit sortGroupsOptionChosen(CreatedAt);
 }
 
 void MainWindow::onDeleteClicked()
