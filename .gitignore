@@ -13,3 +13,4 @@ requirements.txt
 vendor/
 frames/
 random/
+config.json

@@ -4,7 +4,6 @@
 class FastVideoProcessor : public IVideoProcessor {
 public:
     std::vector<std::uint64_t>
-    decodeAndHash(
-    VideoInfo const& v,
-    SearchSettings const& cfg);
+    decodeAndHash(VideoInfo const& video,
+                  SearchSettings const& cfg) override;
 };
