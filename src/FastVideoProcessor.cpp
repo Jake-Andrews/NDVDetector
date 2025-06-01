@@ -22,7 +22,7 @@ extern "C" {
 #include <array>
 #include <cmath>
 #include <filesystem>
-#include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -57,34 +57,75 @@ struct FrameRAII {
     }
 };
 
-// pull at most one decoded frame; return true if a frame was consumed
-template<class OnFrame>
-bool drain_decoder_once(AVCodecContext* ctx,
-    FrameRAII& frm,
-    int64_t& nextPts,
-    bool& fatal,
-    OnFrame&& onFrame)
-{
-    while (true) {
-        int r = avcodec_receive_frame(ctx, frm.get());
-        if (r == AVERROR(EAGAIN) || r == AVERROR_EOF)
-            return false;
-        if (r < 0) {
-            fatal = true;
-            frm.unref();
-            return false;
-        }
-
-        onFrame(frm.get());
-        frm.unref();
-        return true;
-    }
-}
-
 } // namespace
 
 static constexpr int KPROBESIZE = 10 * 1024 * 1024;
 static constexpr int KANALYZEUSEC = 10 * 1'000'000;
+
+// Because we have to seek to a keyframe, the keyframe is likely not at the
+// desired timestamp. therefore this function decodes from the keyframe until
+// the frame that is at the desired timestamp to ensure consistent pHashes
+// across videos regardless of keyframe placement
+static std::optional<uint64_t> decode_until_timestamp(
+    AVFormatContext* fmt,
+    AVCodecContext* codec_ctx,
+    int vstream,
+    int64_t target_pts,
+    FrameRAII& frame,
+    PktPtr& pkt,
+    std::vector<uint8_t>& grayBuf,
+    bool& fatal_error)
+{
+    while (!fatal_error && av_read_frame(fmt, pkt.get()) >= 0) {
+        if (pkt->stream_index != vstream) {
+            av_packet_unref(pkt.get());
+            continue;
+        }
+
+        int s;
+        while ((s = avcodec_send_packet(codec_ctx, pkt.get())) == AVERROR(EAGAIN)) {
+            AVFrame* tmp = frame.get();
+            while (avcodec_receive_frame(codec_ctx, tmp) >= 0)
+                av_frame_unref(tmp);
+        }
+
+        if (s < 0) {
+            av_packet_unref(pkt.get());
+            fatal_error = true;
+            break;
+        }
+        av_packet_unref(pkt.get());
+
+        while (avcodec_receive_frame(codec_ctx, frame.get()) >= 0) {
+            int64_t pts = (frame.get()->pts != AV_NOPTS_VALUE)
+                ? frame.get()->pts
+                : frame.get()->best_effort_timestamp;
+
+            if (pts >= target_pts) {
+                auto hash = hash_frame(frame.get(), grayBuf, fatal_error);
+                frame.unref();
+                return hash;
+            }
+            frame.unref();
+        }
+    }
+    // After reading all packets, flush the decoder once
+    avcodec_send_packet(codec_ctx, nullptr); // flush
+    while (avcodec_receive_frame(codec_ctx, frame.get()) >= 0) {
+        int64_t pts = (frame.get()->pts != AV_NOPTS_VALUE)
+            ? frame.get()->pts
+            : frame.get()->best_effort_timestamp;
+        if (pts >= target_pts) {
+            auto hash = hash_frame(frame.get(), grayBuf, fatal_error);
+            frame.unref();
+            return hash;
+        }
+        frame.unref();
+    }
+    if (!fatal_error) // reached EOF but never hit target
+        fatal_error = true;
+    return std::nullopt;
+}
 
 // saves frames to fs for debugging
 /*
@@ -105,8 +146,7 @@ static void write_pgm(std::filesystem::path const& path,
 std::vector<std::uint64_t>
 FastVideoProcessor::decodeAndHash(
     VideoInfo const& v,
-    SearchSettings const& cfg,
-    std::function<void(int)> const& on_progress)
+    SearchSettings const& cfg)
 {
     // --- fail fast on non-sense input ---
     if (v.path.empty() || !std::filesystem::exists(v.path)) {
@@ -172,13 +212,10 @@ FastVideoProcessor::decodeAndHash(
     codec_ctx->skip_frame = AVDISCARD_DEFAULT;
     // Let FFmpeg apply codec-specific fast flags
     codec_ctx->flags2 |= AV_CODEC_FLAG2_FAST;
-    // Pick a sane explicit thread count (0 = FFmpeg default = may become 1)
-    // For per frame decoding use 1
-    // codec_ctx->thread_count = 0;
+    // Pick a sane explicit thread count
     unsigned tc = std::thread::hardware_concurrency();
-    codec_ctx->thread_count = tc ? tc : 1; // enforce ≥1
-    spdlog::info("[sw] Using {} threads for SW decoding", codec_ctx->thread_count);
-    codec_ctx->skip_idct = AVDISCARD_ALL;
+    unsigned requested_threads = tc ? tc : 1; // enforce ≥1
+    codec_ctx->thread_count = requested_threads;
     codec_ctx->skip_loop_filter = AVDISCARD_ALL;
 
     spdlog::info(">>> about to open decoder");
@@ -187,11 +224,21 @@ FastVideoProcessor::decodeAndHash(
         spdlog::error("[ffmpeg-sw] avcodec_open2 failed: {}", ff_err2str(err));
         return {};
     }
+    // Log actual thread count after decoder is opened since it may differ
+    spdlog::info("[sw] Requested {} threads, using {} for SW decoding",
+        requested_threads, codec_ctx->thread_count);
     spdlog::info(">>> decoder opened, err: {}", ff_err2str(err));
 
-    /* seek to an exact pts (BACKWARD to nearest key-frame) and flush codec  */
-    auto seek_to_pts = [&](int64_t pts) -> bool {
-        if (av_seek_frame(fmt.get(), vstream, pts, AVSEEK_FLAG_BACKWARD) < 0) {
+    // seek to an exact pts and flush codec
+    auto seek_to_pts = [&](int64_t pts, bool keyframeOnly) -> bool {
+        if (pts > st->duration) {
+            spdlog::warn("[seek] target pts {} exceeds stream duration {}",
+                pts, st->duration);
+            return false;
+        }
+
+        int flags = keyframeOnly ? AVSEEK_FLAG_ANY : AVSEEK_FLAG_BACKWARD;
+        if (av_seek_frame(fmt.get(), vstream, pts, flags) < 0) {
             spdlog::warn("[seek] failed to {:.1f}s", pts * av_q2d(st->time_base));
             return false;
         }
@@ -226,64 +273,48 @@ FastVideoProcessor::decodeAndHash(
             break;
         }
 
-        int64_t tgtPts = sec_to_pts(pct * v.duration, st->time_base);
-        if (!seek_to_pts(tgtPts)) {
+        int64_t target_pts = sec_to_pts(pct * v.duration, st->time_base);
+        if (!seek_to_pts(target_pts, cfg.fastHash.useKeyframesOnly)) {
             fatal_error = true;
             break;
         }
 
-        uint64_t tgtHash = 0;
-        bool gotHash = false;
-
-        while (!fatal_error && av_read_frame(fmt.get(), pkt.get()) >= 0) {
-            if (pkt->stream_index != vstream) {
-                av_packet_unref(pkt.get());
-                continue;
+        std::optional<uint64_t> hash;
+        if (cfg.fastHash.useKeyframesOnly) {
+            // In keyframe mode, try to use the keyframe directly first
+            AVFrame* tmp = frame.get();
+            int rc = avcodec_receive_frame(codec_ctx.get(), tmp);
+            if (rc >= 0) {
+                // We got a keyframe directly
+                hash = hash_frame(tmp, grayBuf, fatal_error);
+                frame.unref();
+            } else {
+                // Need to decode at least one frame
+                hash = decode_until_timestamp(fmt.get(), codec_ctx.get(), vstream,
+                    std::numeric_limits<int64_t>::min(), // accept first decoded frame
+                    frame, pkt, grayBuf, fatal_error);
             }
-
-            int s;
-            while ((s = avcodec_send_packet(codec_ctx.get(), pkt.get())) == AVERROR(EAGAIN)) {
-                /* decoder full – drain to make space */
-                AVFrame* tmp = frame.get();
-                if (avcodec_receive_frame(codec_ctx.get(), tmp) >= 0)
-                    av_frame_unref(tmp);
-            }
-            if (s < 0) {
-                av_packet_unref(pkt.get());
-                fatal_error = true;
-                break;
-            }
-            av_packet_unref(pkt.get());
-
-            /* pull every available frame */
-            while (avcodec_receive_frame(codec_ctx.get(), frame.get()) >= 0) {
-                int64_t pts = (frame.get()->pts != AV_NOPTS_VALUE)
-                    ? frame.get()->pts
-                    : frame.get()->best_effort_timestamp;
-
-                if (pts >= tgtPts) { // first frame after mark
-                    if (auto h = hash_frame(frame.get(), grayBuf, fatal_error)) {
-                        tgtHash = *h;
-                        gotHash = true;
-                    }
-                    frame.unref();
-                    break; // stop draining
-                }
-
-                frame.unref(); // before-mark frame – ignore
-            }
-            if (gotHash)
-                break; // leave av_read_frame loop
+        } else {
+            hash = decode_until_timestamp(fmt.get(), codec_ctx.get(), vstream,
+                target_pts, frame, pkt, grayBuf, fatal_error);
         }
 
-        if (!gotHash) { // no frame found before EOF
+        if (!hash) {
             fatal_error = true;
             break;
         }
 
-        hashes.push_back(tgtHash);
+        hashes.push_back(*hash);
     }
 
-    spdlog::info("[sw] finished: {} hashes generated", hashes.size());
+    spdlog::info("[sw] finished: {} hashes generated{}", hashes.size(),
+        fatal_error ? " (fatal error)" : "");
+
+    // Only return results if we got exactly the expected number of hashes
+    // and no fatal errors occurred
+    if (fatal_error || hashes.size() != targetsPct.size()) {
+        spdlog::error("[sw] Failed to generate all required hashes");
+        return {};
+    }
     return hashes;
 }

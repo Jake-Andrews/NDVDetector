@@ -24,7 +24,6 @@ extern "C" {
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
-#include <functional>
 #include <limits>
 #include <mutex>
 #include <optional>
@@ -116,8 +115,7 @@ bool drain_decoder_once(AVCodecContext* ctx,
 std::vector<std::uint64_t>
 SlowVideoProcessor::decodeAndHash(
     VideoInfo const& info,
-    SearchSettings const& cfg,
-    std::function<void(int)> const& onProgress)
+    SearchSettings const& cfg)
 {
     // --- validation ---
     if (info.path.empty() || !std::filesystem::exists(info.path)) {

@@ -6,6 +6,5 @@ public:
     std::vector<std::uint64_t>
     decodeAndHash(
     VideoInfo const& v,
-    SearchSettings const& cfg,
-    std::function<void(int)> const& on_progress);
+    SearchSettings const& cfg);
 };

@@ -188,7 +188,7 @@ void SearchWorker::decodeAndHashVideos(std::vector<VideoInfo>& videos)
         try {
             spdlog::info("[hash] Processing '{}'", v.path);
 
-            auto phashes = m_proc->decodeAndHash(v, m_cfg, {});
+            auto phashes = m_proc->decodeAndHash(v, m_cfg);
 
             if (phashes.empty()) {
                 spdlog::warn("[hash] No hashes generated for '{}'", v.path);
