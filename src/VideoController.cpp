@@ -1,6 +1,7 @@
 // VideoController.cpp
 #include "VideoController.h"
 #include "HardlinkWorker.h"
+#include "SearchSettings.h"
 #include "SearchWorker.h"
 #include "VideoModel.h"
 
@@ -320,9 +321,13 @@ void VideoController::loadDatabase(QString const& path)
     }
 
     auto groups = m_db.loadDuplicateGroups();
+    auto settings = m_db.loadSettings();
+    m_cfg = settings; // keep controller copy
+
     if (m_model)
         m_model->setGroupedVideos(groups);
 
+    emit searchSettingsLoaded(settings);
     emit databaseOpened(path);
 }
 

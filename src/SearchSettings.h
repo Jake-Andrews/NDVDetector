@@ -14,6 +14,7 @@ struct FastHashSettings {
     int maxFrames = 2; 
     int hammingDistance = 4;
     std::uint64_t matchingThreshold = 2;
+    bool useKeyframesOnly = true;
 };
 
 struct SlowHashSettings {
@@ -30,13 +31,18 @@ inline void to_json(nlohmann::json& j, FastHashSettings const& f)
 {
     j = { { "maxFrames", f.maxFrames },
         { "hammingDistance", f.hammingDistance },
-        { "matchingThreshold", f.matchingThreshold } };
+        { "matchingThreshold", f.matchingThreshold },
+        { "useKeyframesOnly", f.useKeyframesOnly } };
 }
 inline void from_json(nlohmann::json const& j, FastHashSettings& f)
 {
     j.at("maxFrames").get_to(f.maxFrames);
     j.at("hammingDistance").get_to(f.hammingDistance);
     j.at("matchingThreshold").get_to(f.matchingThreshold);
+    if (j.contains("useKeyframesOnly"))
+        j.at("useKeyframesOnly").get_to(f.useKeyframesOnly);
+    else
+        f.useKeyframesOnly = true;
 
     f.maxFrames = (f.maxFrames == 2 || f.maxFrames == 10) ? f.maxFrames : 2; // Only allow 2 or 10
     f.hammingDistance = std::clamp(f.hammingDistance, 0, 64);
@@ -93,7 +99,7 @@ struct SearchSettings {
     bool useGlob = false;
     bool caseInsensitive = false;
 
-    std::vector<std::string> extensions = { ".mp4", ".mkv", ".webm" };
+    std::vector<std::string> extensions = {};
     std::vector<std::string> includeFilePatterns, includeDirPatterns,
         excludeFilePatterns, excludeDirPatterns;
     std::optional<std::uint64_t> minBytes, maxBytes;
@@ -240,3 +246,6 @@ compileAllRegexes(SearchSettings& s)
     s.excludeDirRx = compileRegexList(s.excludeDirPatterns, s.useGlob, s.caseInsensitive, errs);
     return errs;
 }
+
+#include <QMetaType>          // NEW
+Q_DECLARE_METATYPE(SearchSettings)   // NEW

@@ -3,15 +3,23 @@
 #include "VideoInfo.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
-#include <chrono>
 #include <filesystem>
 #include <iostream>
 #include <regex>
 #include <spdlog/spdlog.h>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <vector>
+
+static constexpr std::array<std::string_view, 47> video_extensions = {
+    "3g2", "3gp", "amv", "asf", "avi", "bik", "divx", "drc", "f4a", "f4b", "f4p", "f4v",
+    "flv", "gifv", "h264", "hevc", "m1v", "m2ts", "m2v", "m4p", "m4v", "mkv", "mod",
+    "mov", "mp2", "mp4", "mpe", "mpeg", "mpg", "mpv", "mxf", "mng", "nsv", "ogg", "ogv",
+    "qt", "rm", "rmvb", "roq", "rrc", "smk", "svi", "ts", "vob", "webm", "wmv", "yuv"
+};
 
 #if defined(_WIN32)
 #    include <windows.h>
@@ -174,8 +182,22 @@ getVideosFromPath(std::filesystem::path const& root, SearchSettings const& cfg)
             return static_cast<char>(std::tolower(c));
         });
 
-        if (!cfg.extensions.empty() && std::find(cfg.extensions.begin(), cfg.extensions.end(), ext) == cfg.extensions.end()) {
-            return;
+        // Remove the leading '.' if present
+        if (!ext.empty() && ext[0] == '.')
+            ext.erase(0, 1);
+
+        // empty extensions means accept all video extensions
+        if (cfg.extensions.empty()) {
+            // No user restriction; check against known video extensions
+            if (!std::ranges::binary_search(video_extensions, ext)) {
+                // Not a valid video extension
+                return;
+            }
+        } else {
+            // User specified extensions: check if ext is in cfg.extensions
+            if (std::ranges::find(cfg.extensions, ext) == cfg.extensions.end()) {
+                return;
+            }
         }
 
         // --- size test ---

@@ -405,6 +405,7 @@ SearchSettings MainWindow::collectSearchSettings() const
         s.fastHash.maxFrames = ui->maxFramesSpinFast->value();
         s.fastHash.hammingDistance = ui->hammingDistanceThresholdSpinFast->value();
         s.fastHash.matchingThreshold = ui->matchingThresholdNumSpinBoxFast->value();
+        s.fastHash.useKeyframesOnly = ui->keyframesOnlyCheckBoxFast->isChecked();
     } else {
         s.slowHash.maxFrames = ui->maxFramesSpin->value();
         s.slowHash.skipPercent = ui->skipSpin->value();
@@ -518,6 +519,7 @@ void MainWindow::applySearchSettings(SearchSettings const& s)
     ui->maxFramesSpinFast->setValue(s.fastHash.maxFrames);
     ui->hammingDistanceThresholdSpinFast->setValue(s.fastHash.hammingDistance);
     ui->matchingThresholdNumSpinBoxFast->setValue(s.fastHash.matchingThreshold);
+    ui->keyframesOnlyCheckBoxFast->setChecked(s.fastHash.useKeyframesOnly);
 
     // --- slow-hash widgets ---
     ui->skipSpin->setValue(s.slowHash.skipPercent);
@@ -530,4 +532,8 @@ void MainWindow::applySearchSettings(SearchSettings const& s)
         ui->fixedNumThresholdRadio->setChecked(true);
         ui->matchingThresholdNumSpinBox->setValue(s.slowHash.matchingThresholdNum);
     }
+}
+void MainWindow::onSearchSettingsLoaded(SearchSettings const& s)
+{
+    applySearchSettings(s);
 }

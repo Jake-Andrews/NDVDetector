@@ -34,23 +34,23 @@ public:
     enum SortOptions { Size };
     Q_ENUM(SortOptions)
 
-signals:                     
-    void searchRequested(SearchSettings);
-    void selectOptionChosen(MainWindow::SelectOptions);
-    void sortOptionChosen(MainWindow::SortOptions);
-    void sortGroupsOptionChosen(MainWindow::SortOptions);
-    void deleteOptionChosen(MainWindow::DeleteOptions);
+signals:                                       // emitted by MainWindow
+    void searchRequested(SearchSettings cfg);
+    void selectOptionChosen(SelectOptions option);
+    void sortOptionChosen(SortOptions option);
+    void sortGroupsOptionChosen(SortOptions option);
+    void deleteOptionChosen(DeleteOptions option);
     void hardlinkTriggered();
+    void addDirectoryRequested(QString const& path);
+    void removeSelectedDirectoriesRequested(QStringList const& paths);
+    void databaseLoadRequested(QString const& path);
+    void databaseCreateRequested(QString const& path);
 
-    void addDirectoryRequested(QString const&);
-    void removeSelectedDirectoriesRequested(QStringList const&);
-    void databaseLoadRequested(QString const&);
-    void databaseCreateRequested(QString const&);
-
-public slots:
-    void onDirectoryListUpdated(QStringList const&);
-    void onDuplicateGroupsUpdated(const std::vector<std::vector<VideoInfo>>&);
-    void setCurrentDatabase(QString const&);
+public slots:                                   // receive from controller
+    void onDuplicateGroupsUpdated(const std::vector<std::vector<VideoInfo>>& groups);
+    void onDirectoryListUpdated(const QStringList& dirs);
+    void setCurrentDatabase(QString const& path);
+    void onSearchSettingsLoaded(const SearchSettings& settings);
 
 private slots:                
     void onSearchClicked();
@@ -72,7 +72,7 @@ private:
     bool           eventFilter(QObject*, QEvent*) override;
     SearchSettings collectSearchSettings() const;
 
-    // --- settings persistence ---------------------------------
+    // --- settings persistence ---
     void  applySearchSettings(SearchSettings const&);   // fill widgets
     void  saveCurrentSettings();                        // read + store
     int   m_settingsTabIdx { -1 };                      // index of Settings tab

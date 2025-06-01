@@ -18,6 +18,7 @@ int main(int argc, char* argv[])
     qRegisterMetaType<MainWindow::DeleteOptions>("MainWindow::DeleteOptions");
     qRegisterMetaType<MainWindow::SelectOptions>("MainWindow::SelectOptions");
     qRegisterMetaType<MainWindow::SortOptions>("MainWindow::SortOptions");
+    qRegisterMetaType<SearchSettings>("SearchSettings");
 
     // --- determine which database to open ---
     std::string dbPath = cfg::loadDatabasePath().value_or(cfg::defaultDatabasePath());
@@ -87,6 +88,9 @@ int main(int argc, char* argv[])
         [&](QString msg) {
             QMessageBox::critical(&w, "Error", msg);
         });
+
+    QObject::connect(&controller, &VideoController::searchSettingsLoaded,
+        &w, &MainWindow::onSearchSettingsLoaded);
 
     w.show();
     return app.exec();

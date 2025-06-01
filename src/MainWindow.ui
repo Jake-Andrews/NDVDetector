@@ -315,6 +315,16 @@
                   </property>
                  </widget>
                 </item>
+                <item row="3" column="0">
+                 <widget class="QCheckBox" name="keyframesOnlyCheckBoxFast">
+                  <property name="text">
+                   <string>Decode only keyframes</string>
+                  </property>
+                  <property name="checked">
+                   <bool>true</bool>
+                  </property>
+                 </widget>
+                </item>
                </layout>
               </widget>
               <widget class="QWidget" name="slowTab">

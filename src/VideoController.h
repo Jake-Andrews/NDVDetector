@@ -52,6 +52,7 @@ signals:
     void searchCompleted();
 
     void databaseOpened(QString const& path);
+    void searchSettingsLoaded(SearchSettings const& settings);    
 
 private:
     DatabaseManager& m_db;
