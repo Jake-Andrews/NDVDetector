@@ -1,3 +1,4 @@
+#include "ConfigManager.h"
 #include "DatabaseManager.h"
 #include "MainWindow.h"
 #include "SearchSettings.h"
@@ -18,8 +19,10 @@ int main(int argc, char* argv[])
     qRegisterMetaType<MainWindow::SelectOptions>("MainWindow::SelectOptions");
     qRegisterMetaType<MainWindow::SortOptions>("MainWindow::SortOptions");
 
-    // -- App setup --
-    DatabaseManager db("videos.db");
+    // --- determine which database to open ---
+    std::string dbPath = cfg::loadDatabasePath().value_or(cfg::defaultDatabasePath());
+
+    DatabaseManager db(dbPath);
     VideoController controller(db);
     MainWindow w(&db);
     controller.setModel(w.model());
@@ -39,7 +42,7 @@ int main(int argc, char* argv[])
     QObject::connect(&controller, &VideoController::databaseOpened,
         &w, &MainWindow::setCurrentDatabase);
 
-    w.setCurrentDatabase(QString::fromUtf8("videos.db"));
+    w.setCurrentDatabase(QString::fromStdString(dbPath));
 
     QObject::connect(&w, &MainWindow::searchRequested, [&controller](SearchSettings cfg) {
         controller.setSearchSettings(cfg);

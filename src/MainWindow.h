@@ -9,6 +9,7 @@
 #include "DatabaseManager.h"
 #include "SearchSettings.h"
 #include "VideoInfo.h"
+#include "ConfigManager.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
@@ -70,6 +71,11 @@ private slots:
 private:
     bool           eventFilter(QObject*, QEvent*) override;
     SearchSettings collectSearchSettings() const;
+
+    // --- settings persistence ---------------------------------
+    void  applySearchSettings(SearchSettings const&);   // fill widgets
+    void  saveCurrentSettings();                        // read + store
+    int   m_settingsTabIdx { -1 };                      // index of Settings tab
 
     // data
     Ui::MainWindow*             ui   = nullptr;

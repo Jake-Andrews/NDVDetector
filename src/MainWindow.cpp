@@ -1,6 +1,7 @@
 // MainWindow.cpp
 #include "MainWindow.h"
 
+#include "ConfigManager.h"
 #include "GroupRowDelegate.h"
 #include "RegexTesterDialog.h"
 #include "VideoModel.h"
@@ -17,6 +18,7 @@
 #include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QSpinBox>
+#include <QStringList>
 #include <QToolButton>
 #include <numeric>
 #include <spdlog/spdlog.h>
@@ -34,6 +36,9 @@ MainWindow::MainWindow(DatabaseManager* db, QWidget* parent)
     , m_db(db)
 {
     ui->setupUi(this);
+
+    // remember “Settings” tab index
+    m_settingsTabIdx = ui->tabWidget->indexOf(ui->settingsTab);
 
     // --- matching-threshold radio buttons (slow tab only) ---
     auto updateThresholdWidgetsSlow = [this](bool numMode) {
@@ -139,6 +144,19 @@ MainWindow::MainWindow(DatabaseManager* db, QWidget* parent)
             for (QModelIndex const& ix : sel.indexes())
                 if (ix.column() == 0)
                     m_model->selectRow(ix.row());
+        });
+
+    /* ---- load settings from DB & populate widgets ---- */
+    applySearchSettings(m_db->loadSettings());
+
+    /* ---- save when user leaves the Settings tab ---- */
+    int initialIdx = ui->tabWidget->currentIndex();
+    connect(ui->tabWidget, &QTabWidget::currentChanged,
+        this,
+        [this, prev = initialIdx](int newIdx) mutable {
+            if (prev == m_settingsTabIdx && newIdx != m_settingsTabIdx)
+                saveCurrentSettings(); // user just left Settings
+            prev = newIdx;
         });
 }
 
@@ -318,7 +336,11 @@ void MainWindow::onNewDbClicked()
     if (!f.isEmpty())
         emit databaseCreateRequested(f);
 }
-void MainWindow::setCurrentDatabase(QString const& path) { ui->currentDbLineEdit->setText(path); }
+void MainWindow::setCurrentDatabase(QString const& path)
+{
+    ui->currentDbLineEdit->setText(path);
+    cfg::saveDatabasePath(path.toStdString()); // <── persist selection
+}
 
 SearchSettings MainWindow::collectSearchSettings() const
 {
@@ -429,5 +451,83 @@ void MainWindow::onValidatePatternsClicked()
                                   return a + "\n• " + b;
                               })));
         QMessageBox::critical(this, tr("Pattern errors"), msg);
+    }
+}
+
+// Persist current GUI values to DB
+void MainWindow::saveCurrentSettings()
+{
+    try {
+        m_db->saveSettings(collectSearchSettings());
+    } catch (std::exception const& e) {
+        spdlog::error("saveCurrentSettings failed: {}", e.what());
+    }
+}
+
+// Populate GUI from SearchSettings structure
+void MainWindow::applySearchSettings(SearchSettings const& s)
+{
+    // --- simple checkboxes ---
+    ui->globCheckBox->setChecked(s.useGlob);
+    ui->caseCheckBox->setChecked(s.caseInsensitive);
+
+    // --- extensions line-edit ---
+    QStringList extLst;
+    for (auto const& e : s.extensions)
+        extLst << QString::fromStdString(e);
+    ui->extensionsEdit->setText(extLst.join(','));
+
+    // --- pattern text-edits ---
+    auto join = [](std::vector<std::string> const& v) {
+        QStringList q;
+        for (auto const& x : v)
+            q << QString::fromStdString(x);
+        return q.join('\n');
+    };
+    ui->includeFileEdit->setPlainText(join(s.includeFilePatterns));
+    ui->includeDirEdit->setPlainText(join(s.includeDirPatterns));
+    ui->excludeFileEdit->setPlainText(join(s.excludeFilePatterns));
+    ui->excludeDirEdit->setPlainText(join(s.excludeDirPatterns));
+
+    // --- size limits (MB) ---
+    ui->minBytesSpin->setValue(s.minBytes ? *s.minBytes / (1024 * 1024) : 0);
+    ui->maxBytesSpin->setValue(s.maxBytes ? *s.maxBytes / (1024 * 1024) : 0);
+
+    // --- directory list widget ---
+    ui->directoryListWidget->clear();
+    for (auto const& d : s.directories) {
+        auto* it = new QTreeWidgetItem(ui->directoryListWidget);
+        it->setText(0, QString::fromStdString(d.path));
+        it->setCheckState(1, d.recursive ? Qt::Checked : Qt::Unchecked);
+    }
+    if (ui->directoryListWidget->headerItem()->text(0).isEmpty()) {
+        ui->directoryListWidget->setHeaderLabels({ tr("Directory"), tr("Recursive") });
+        ui->directoryListWidget->setColumnCount(2);
+        ui->directoryListWidget->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+        ui->directoryListWidget->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    }
+
+    // --- thumbnails per video ---
+    ui->thumbnailsSpin->setValue(s.thumbnailsPerVideo);
+
+    // --- hash method selection ---
+    bool fast = s.method == HashMethod::Fast;
+    ui->hashMethodCombo->setCurrentIndex(fast ? 0 : 1);
+
+    // --- fast-hash widgets ---
+    ui->maxFramesSpinFast->setValue(s.fastHash.maxFrames);
+    ui->hammingDistanceThresholdSpinFast->setValue(s.fastHash.hammingDistance);
+    ui->matchingThresholdNumSpinBoxFast->setValue(s.fastHash.matchingThreshold);
+
+    // --- slow-hash widgets ---
+    ui->skipSpin->setValue(s.slowHash.skipPercent);
+    ui->maxFramesSpin->setValue(s.slowHash.maxFrames);
+    ui->hammingDistanceThresholdSpin->setValue(s.slowHash.hammingDistance);
+    if (s.slowHash.usePercentThreshold) {
+        ui->percentThresholdRadio->setChecked(true);
+        ui->matchingThresholdPercentSpinBox->setValue(s.slowHash.matchingThresholdPct);
+    } else {
+        ui->fixedNumThresholdRadio->setChecked(true);
+        ui->matchingThresholdNumSpinBox->setValue(s.slowHash.matchingThresholdNum);
     }
 }
