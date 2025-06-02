@@ -412,6 +412,7 @@ SearchSettings MainWindow::collectSearchSettings() const
         s.slowHash.maxFrames = ui->maxFramesSpin->value();
         s.slowHash.hammingDistance = ui->hammingDistanceThresholdSpin->value();
         s.slowHash.usePercentThreshold = ui->percentThresholdRadio->isChecked();
+        s.slowHash.useKeyframesOnly = ui->keyframesOnlyCheckBoxSlow->isChecked();
         if (s.slowHash.usePercentThreshold)
             s.slowHash.matchingThresholdPct = ui->matchingThresholdPercentSpinBox->value();
         else
@@ -532,6 +533,7 @@ void MainWindow::applySearchSettings(SearchSettings const& s)
         ui->fixedNumThresholdRadio->setChecked(true);
         ui->matchingThresholdNumSpinBox->setValue(s.slowHash.matchingThresholdNum);
     }
+    ui->keyframesOnlyCheckBoxSlow->setChecked(s.slowHash.useKeyframesOnly);
 }
 void MainWindow::onSearchSettingsLoaded(SearchSettings const& s)
 {

@@ -102,8 +102,10 @@ hash_frame(AVFrame const* frm, std::vector<uint8_t>& buf, bool& fatal_error)
 {
     try {
         int w = 0, h = 0;
-        if (!vpu::extract_luma_full(frm, buf, w, h))
+        if (!vpu::extract_luma_full(frm, buf, w, h)) {
+            spdlog::info("rejecting");
             return std::nullopt;
+        }
 
         /*
         // Early flat frame detection before expensive hash computation
@@ -116,8 +118,10 @@ hash_frame(AVFrame const* frm, std::vector<uint8_t>& buf, bool& fatal_error)
         // mean-average  → 32×32 down-scale  → Phash
         auto hval = compute_phash_full(buf.data(), w, h);
 
-        if (!hval || *hval == vpu::PHASH_ALL_ONE_COLOUR)
+        if (!hval || *hval == vpu::PHASH_ALL_ONE_COLOUR) {
+            spdlog::info("rejecting");
             return std::nullopt;
+        }
         return hval;
 
     } catch (std::exception const& e) {

@@ -446,6 +446,13 @@
                   <property name="value"><number>4</number></property>
                  </widget>
                 </item>
+                <item row="5" column="0">
+                 <widget class="QCheckBox" name="keyframesOnlyCheckBoxSlow">
+                  <property name="text">
+                   <string>Decode only keyframes</string>
+                  </property>
+                 </widget>
+                </item>
                </layout>
               </widget>
              </widget>

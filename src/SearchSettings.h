@@ -24,6 +24,7 @@ struct SlowHashSettings {
     bool usePercentThreshold = false;
     double matchingThresholdPct = 50.0;     // 1-100
     std::uint64_t matchingThresholdNum = 5; // 1-10000
+    bool useKeyframesOnly = true;
 };
 
 /* json helpers */
@@ -55,7 +56,8 @@ inline void to_json(nlohmann::json& j, SlowHashSettings const& s)
         { "hammingDistance", s.hammingDistance },
         { "usePercentThreshold", s.usePercentThreshold },
         { "matchingThresholdPct", s.matchingThresholdPct },
-        { "matchingThresholdNum", s.matchingThresholdNum } };
+        { "matchingThresholdNum", s.matchingThresholdNum },
+        { "useKeyframesOnly", s.useKeyframesOnly } };
 }
 inline void from_json(nlohmann::json const& j, SlowHashSettings& s)
 {
@@ -65,6 +67,10 @@ inline void from_json(nlohmann::json const& j, SlowHashSettings& s)
     j.at("usePercentThreshold").get_to(s.usePercentThreshold);
     j.at("matchingThresholdPct").get_to(s.matchingThresholdPct);
     j.at("matchingThresholdNum").get_to(s.matchingThresholdNum);
+    if (j.contains("useKeyframesOnly"))
+        j.at("useKeyframesOnly").get_to(s.useKeyframesOnly);
+    else
+        s.useKeyframesOnly = false;
 
     s.skipPercent = std::clamp(s.skipPercent, 0, 40);
     // No clamping for slow mode - user can choose any value
