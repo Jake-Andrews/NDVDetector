@@ -6,7 +6,6 @@ test_videos/
 thumbnails/
 venv/
 *.db
-*.png
 text.txt
 requirements.txt
 .aider*
